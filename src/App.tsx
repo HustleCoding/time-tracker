@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "./App.css";
 
 type RawTimeEntry = {
@@ -26,6 +27,15 @@ const toTimeEntry = (raw: RawTimeEntry): TimeEntry => ({
   endTime: raw.end_time,
   duration: raw.duration,
 });
+
+type TimerStatus = {
+  is_running: boolean;
+  project_name: string | null;
+  start_time: number | null;
+  elapsed_seconds: number | null;
+};
+
+const TIMER_STATUS_EVENT = "timer://status";
 
 const formatDuration = (totalSeconds: number): string => {
   const safeSeconds = Math.max(0, totalSeconds);
@@ -70,6 +80,7 @@ function App() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
+  const wasRunningRef = useRef(false);
 
   const loadEntries = useCallback(async () => {
     const rawEntries = await invoke<RawTimeEntry[]>("get_today_entries");
@@ -89,18 +100,88 @@ function App() {
     }
   }, [loadEntries]);
 
+  const applyStatus = useCallback(
+    async (status: TimerStatus) => {
+      const running = status.is_running;
+      const wasRunning = wasRunningRef.current;
+
+      setIsRunning(running);
+
+      if (running) {
+        const startSeconds =
+          typeof status.start_time === "number"
+            ? status.start_time
+            : Math.floor(Date.now() / 1000);
+        setStartTimestamp(startSeconds * 1000);
+        const elapsed =
+          typeof status.elapsed_seconds === "number"
+            ? Math.max(0, status.elapsed_seconds)
+            : Math.max(0, Math.floor(Date.now() / 1000) - startSeconds);
+        setElapsedSeconds(elapsed);
+
+        if (typeof status.project_name === "string") {
+          setProjectName(status.project_name);
+        }
+      } else {
+        setStartTimestamp(null);
+        setElapsedSeconds(0);
+        if (wasRunning) {
+          setProjectName("");
+        }
+      }
+
+      wasRunningRef.current = running;
+      setError(null);
+
+      if (wasRunning && !running) {
+        await refreshEntries();
+      }
+    },
+    [refreshEntries],
+  );
+
+  const syncStatus = useCallback(async () => {
+    try {
+      const status = await invoke<TimerStatus>("get_timer_status");
+      await applyStatus(status);
+    } catch (err) {
+      setError(parseError(err));
+    }
+  }, [applyStatus]);
+
   useEffect(() => {
     void (async () => {
       try {
         await invoke("initialize_database");
         await refreshEntries();
+        await syncStatus();
       } catch (err) {
         setError(parseError(err));
       } finally {
         setLoading(false);
       }
     })();
-  }, [refreshEntries]);
+  }, [refreshEntries, syncStatus]);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+
+    void (async () => {
+      try {
+        unlisten = await listen<TimerStatus>(TIMER_STATUS_EVENT, (event) => {
+          void applyStatus(event.payload);
+        });
+      } catch (err) {
+        setError(parseError(err));
+      }
+    })();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [applyStatus]);
 
   useEffect(() => {
     if (!isRunning || startTimestamp === null) {
@@ -117,39 +198,29 @@ function App() {
     return () => window.clearInterval(timerId);
   }, [isRunning, startTimestamp]);
 
-  const handleStart = () => {
-    if (isRunning) {
+  const handleStart = async () => {
+    if (isRunning || projectName.trim().length === 0) {
       return;
     }
 
-    setStartTimestamp(Date.now());
-    setElapsedSeconds(0);
-    setIsRunning(true);
+    try {
+      const status = await invoke<TimerStatus>("start_timer", { projectName });
+      await applyStatus(status);
+    } catch (err) {
+      setError(parseError(err));
+    }
   };
 
   const handleStop = async () => {
-    if (!isRunning || startTimestamp === null) {
+    if (!isRunning) {
       return;
     }
 
-    const endTimestamp = Date.now();
-    const startSeconds = Math.floor(startTimestamp / 1000);
-    const endSeconds = Math.floor(endTimestamp / 1000);
-
     try {
-      await invoke("create_time_entry", {
-        projectName,
-        startTime: startSeconds,
-        endTime: endSeconds,
-      });
-      await refreshEntries();
+      await invoke<TimeEntry | null>("stop_timer");
+      await syncStatus();
     } catch (err) {
       setError(parseError(err));
-    } finally {
-      setIsRunning(false);
-      setStartTimestamp(null);
-      setElapsedSeconds(0);
-      setProjectName("");
     }
   };
 
