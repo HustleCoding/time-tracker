@@ -21,7 +21,7 @@ pub struct TimeEntry {
 }
 
 #[tauri::command]
-pub async fn initialize_database(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn initialize_database(app_handle: tauri::AppHandle) -> Result<(), String> {
     let db_path = resolve_db_path(&app_handle)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _ = open_connection(db_path)?;
@@ -32,7 +32,7 @@ pub async fn initialize_database(app_handle: tauri::AppHandle) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry>, String> {
+async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry>, String> {
     let db_path = resolve_db_path(&app_handle)?;
     let (start_ts, end_ts) = day_bounds_timestamps()?;
 
@@ -71,7 +71,7 @@ pub async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeE
 }
 
 #[tauri::command]
-pub async fn create_time_entry(
+async fn create_time_entry(
     app_handle: tauri::AppHandle,
     project_name: String,
     start_time: i64,
@@ -112,7 +112,7 @@ pub async fn create_time_entry(
 }
 
 #[tauri::command]
-pub async fn update_time_entry_name(
+async fn update_time_entry_name(
     app_handle: tauri::AppHandle,
     id: i64,
     project_name: String,
@@ -138,7 +138,7 @@ pub async fn update_time_entry_name(
 }
 
 #[tauri::command]
-pub async fn delete_time_entry(app_handle: tauri::AppHandle, id: i64) -> Result<(), String> {
+async fn delete_time_entry(app_handle: tauri::AppHandle, id: i64) -> Result<(), String> {
     let db_path = resolve_db_path(&app_handle)?;
 
     tauri::async_runtime::spawn_blocking(move || {

@@ -69,6 +69,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
 
   const loadEntries = useCallback(async () => {
     const rawEntries = await invoke<RawTimeEntry[]>("get_today_entries");
@@ -152,19 +153,25 @@ function App() {
     }
   };
 
-  const handleDelete = async (id: number) => {
-    const confirmed = window.confirm("Delete this time entry?");
-    if (!confirmed) {
+  const confirmDelete = async () => {
+    if (!deleteTarget) {
       return;
     }
 
+    const id = deleteTarget.id;
+
     try {
       await invoke("delete_time_entry", { id });
-      setEntries((previous) => previous.filter((entry) => entry.id !== id));
+      await refreshEntries();
       setError(null);
+      setDeleteTarget(null);
     } catch (err) {
       setError(parseError(err));
     }
+  };
+
+  const cancelDelete = () => {
+    setDeleteTarget(null);
   };
 
   const beginEditing = (entry: TimeEntry) => {
@@ -334,7 +341,7 @@ function App() {
                     <button
                       type="button"
                       className="button-ghost button-ghost--danger"
-                      onClick={() => handleDelete(entry.id)}
+                      onClick={() => setDeleteTarget(entry)}
                     >
                       Delete
                     </button>
@@ -345,6 +352,32 @@ function App() {
           </ul>
         )}
       </section>
+
+      {deleteTarget && (
+        <div className="delete-dialog" role="dialog" aria-modal="true">
+          <div className="delete-dialog__panel">
+            <h3 className="delete-dialog__title">Delete this entry?</h3>
+            <p className="delete-dialog__body">
+              Removing <strong>{deleteTarget.projectName}</strong> can&apos;t be undone. The tracked
+              time will be removed from today&apos;s total.
+            </p>
+            <div className="delete-dialog__actions">
+              <button type="button" className="button-ghost" onClick={cancelDelete}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="delete-dialog__confirm"
+                onClick={() => {
+                  void confirmDelete();
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
