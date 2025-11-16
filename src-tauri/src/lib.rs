@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{fs, io, path::PathBuf, sync::Mutex};
 
 use chrono::{Duration, Local, LocalResult, TimeZone, Utc};
 use rusqlite::{params, Connection};
@@ -9,15 +9,27 @@ use tauri::{
     tray::{TrayIconBuilder, TrayIconEvent},
     AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
+use tauri_plugin_sql::{Migration, MigrationKind};
 
 const DB_FILE_NAME: &str = "time_tracker.db";
+const DB_URL: &str = "sqlite:time_tracker.db";
 const TRAY_ID: &str = "time-tracker-tray";
 const MENU_STATUS_ID: &str = "status";
 const MENU_START_ID: &str = "start-timer";
 const MENU_STOP_ID: &str = "stop-timer";
 const MENU_TOGGLE_WINDOW_ID: &str = "toggle-window";
 const MENU_QUIT_ID: &str = "quit";
+const MENU_TOTAL_ID: &str = "total-today";
 const TIMER_STATUS_EVENT: &str = "timer://status";
+const CREATE_TIME_ENTRIES_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS time_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_name TEXT NOT NULL,
+        start_time INTEGER NOT NULL,
+        end_time INTEGER NOT NULL,
+        duration INTEGER NOT NULL
+    )
+"#;
 
 #[derive(Debug, Serialize)]
 pub struct TimeEntry {
@@ -163,6 +175,29 @@ async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry
 }
 
 #[tauri::command]
+async fn get_today_total(app_handle: tauri::AppHandle) -> Result<i64, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+    let (start_ts, end_ts) = day_bounds_timestamps()?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+        let total: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(duration), 0)
+                 FROM time_entries
+                 WHERE start_time >= ?1 AND start_time < ?2",
+                params![start_ts, end_ts],
+                |row| row.get(0),
+            )
+            .map_err(|err| err.to_string())?;
+
+        Ok::<_, String>(total)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 async fn create_time_entry(
     app_handle: tauri::AppHandle,
     project_name: String,
@@ -267,6 +302,11 @@ async fn toggle_window(app_handle: tauri::AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations(DB_URL, database_migrations())
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
         .manage(TimerState::default())
         .on_window_event(|window, event| {
@@ -280,6 +320,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             get_today_entries,
+            get_today_total,
             create_time_entry,
             update_time_entry_name,
             delete_time_entry,
@@ -384,18 +425,18 @@ async fn persist_time_entry(
 
 fn open_connection(db_path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS time_entries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_name TEXT NOT NULL,
-            start_time INTEGER NOT NULL,
-            end_time INTEGER NOT NULL,
-            duration INTEGER NOT NULL
-        )",
-        [],
-    )
-    .map_err(|err| err.to_string())?;
+    conn.execute(CREATE_TIME_ENTRIES_TABLE_SQL, [])
+        .map_err(|err| err.to_string())?;
     Ok(conn)
+}
+
+fn database_migrations() -> Vec<Migration> {
+    vec![Migration {
+        version: 1,
+        description: "create_time_entries",
+        sql: CREATE_TIME_ENTRIES_TABLE_SQL,
+        kind: MigrationKind::Up,
+    }]
 }
 
 fn day_bounds_timestamps() -> Result<(i64, i64), String> {
@@ -425,9 +466,11 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         timer_state.status()
     };
     let app_handle = app.handle();
+    let today_total = current_today_total(&app_handle).map_err(to_tauri_error)?;
     let initial_menu = build_tray_menu(
         &app_handle,
         &initial_status,
+        today_total,
         is_main_window_visible(&app_handle),
     )?;
 
@@ -479,10 +522,16 @@ fn refresh_tray(app: &AppHandle) -> tauri::Result<()> {
         let timer_state = app.state::<TimerState>();
         timer_state.status()
     };
-    apply_tray_updates(app, &status)
+    let total = current_today_total(app).map_err(to_tauri_error)?;
+
+    apply_tray_updates(app, &status, total)
 }
 
-fn apply_tray_updates(app: &AppHandle, status: &TimerStatusPayload) -> tauri::Result<()> {
+fn apply_tray_updates(
+    app: &AppHandle,
+    status: &TimerStatusPayload,
+    today_total_seconds: i64,
+) -> tauri::Result<()> {
     let tray_assets = app.state::<TrayAssets>();
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let icon = if status.is_running {
@@ -498,7 +547,8 @@ fn apply_tray_updates(app: &AppHandle, status: &TimerStatusPayload) -> tauri::Re
         } else {
             tray.set_tooltip(Some(tooltip.as_str()))?;
         }
-        let menu = build_tray_menu(app, status, is_main_window_visible(app))?;
+        let menu =
+            build_tray_menu(app, status, today_total_seconds, is_main_window_visible(app))?;
         tray.set_menu(Some(menu))?;
     }
 
@@ -508,11 +558,18 @@ fn apply_tray_updates(app: &AppHandle, status: &TimerStatusPayload) -> tauri::Re
 fn build_tray_menu<R: Runtime>(
     app: &AppHandle<R>,
     status: &TimerStatusPayload,
+    today_total_seconds: i64,
     window_visible: bool,
 ) -> tauri::Result<tauri::menu::Menu<R>> {
     let status_item = MenuItemBuilder::with_id(MENU_STATUS_ID, build_status_text(status))
         .enabled(false)
         .build(app)?;
+    let total_item = MenuItemBuilder::with_id(
+        MENU_TOTAL_ID,
+        format!("Total Today: {}", format_duration(today_total_seconds)),
+    )
+    .enabled(false)
+    .build(app)?;
     let start_item = MenuItemBuilder::with_id(MENU_START_ID, "Start Timer")
         .enabled(!status.is_running)
         .build(app)?;
@@ -525,6 +582,7 @@ fn build_tray_menu<R: Runtime>(
 
     MenuBuilder::new(app)
         .item(&status_item)
+        .item(&total_item)
         .separator()
         .item(&start_item)
         .item(&stop_item)
@@ -575,4 +633,25 @@ fn format_duration(total_seconds: i64) -> String {
     let minutes = (total_seconds % 3600) / 60;
     let seconds = total_seconds % 60;
     format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn current_today_total(app: &AppHandle) -> Result<i64, String> {
+    let db_path = resolve_db_path(app)?;
+    let (start_ts, end_ts) = day_bounds_timestamps()?;
+    let conn = open_connection(db_path)?;
+    let total: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration), 0)
+             FROM time_entries
+             WHERE start_time >= ?1 AND start_time < ?2",
+            params![start_ts, end_ts],
+            |row| row.get(0),
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(total)
+}
+
+fn to_tauri_error(message: String) -> tauri::Error {
+    tauri::Error::from(io::Error::new(io::ErrorKind::Other, message))
 }
