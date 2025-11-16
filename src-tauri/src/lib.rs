@@ -27,7 +27,9 @@ const CREATE_TIME_ENTRIES_TABLE_SQL: &str = r#"
         project_name TEXT NOT NULL,
         start_time INTEGER NOT NULL,
         end_time INTEGER NOT NULL,
-        duration INTEGER NOT NULL
+        duration INTEGER NOT NULL,
+        hourly_rate REAL NOT NULL DEFAULT 0,
+        amount REAL NOT NULL DEFAULT 0
     )
 "#;
 
@@ -38,6 +40,8 @@ pub struct TimeEntry {
     pub start_time: i64,
     pub end_time: i64,
     pub duration: i64,
+    pub hourly_rate: f64,
+    pub amount: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,12 +50,14 @@ struct TimerStatusPayload {
     project_name: Option<String>,
     start_time: Option<i64>,
     elapsed_seconds: Option<i64>,
+    hourly_rate: Option<f64>,
 }
 
 #[derive(Clone)]
 struct ActiveTimer {
     project_name: String,
     start_time: i64,
+    hourly_rate: f64,
 }
 
 #[derive(Default)]
@@ -74,6 +80,7 @@ impl TimerState {
                 project_name: Some(active.project_name.clone()),
                 start_time: Some(active.start_time),
                 elapsed_seconds: Some(elapsed),
+                hourly_rate: Some(active.hourly_rate),
             }
         } else {
             TimerStatusPayload {
@@ -81,12 +88,21 @@ impl TimerState {
                 project_name: None,
                 start_time: None,
                 elapsed_seconds: None,
+                hourly_rate: None,
             }
         }
     }
 
-    fn start(&self, project_name: String, start_time: i64) -> Result<TimerStatusPayload, String> {
-        let mut guard = self.inner.lock().map_err(|_| "Timer state is unavailable")?;
+    fn start(
+        &self,
+        project_name: String,
+        start_time: i64,
+        hourly_rate: f64,
+    ) -> Result<TimerStatusPayload, String> {
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| "Timer state is unavailable")?;
         if guard.active.is_some() {
             return Err("A timer is already running".into());
         }
@@ -94,6 +110,7 @@ impl TimerState {
         guard.active = Some(ActiveTimer {
             project_name: project_name.clone(),
             start_time,
+            hourly_rate,
         });
 
         Ok(TimerStatusPayload {
@@ -101,6 +118,7 @@ impl TimerState {
             project_name: Some(project_name),
             start_time: Some(start_time),
             elapsed_seconds: Some(0),
+            hourly_rate: Some(hourly_rate),
         })
     }
 
@@ -124,6 +142,12 @@ impl TrayAssets {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct TodayTotals {
+    total_seconds: i64,
+    total_amount: f64,
+}
+
 #[tauri::command]
 async fn initialize_database(app_handle: tauri::AppHandle) -> Result<(), String> {
     let db_path = resolve_db_path(&app_handle)?;
@@ -144,7 +168,7 @@ async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry
         let conn = open_connection(db_path)?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, project_name, start_time, end_time, duration
+                "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
                  FROM time_entries
                  WHERE start_time >= ?1 AND start_time < ?2
                  ORDER BY start_time DESC",
@@ -159,6 +183,8 @@ async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry
                     start_time: row.get(2)?,
                     end_time: row.get(3)?,
                     duration: row.get(4)?,
+                    hourly_rate: row.get(5)?,
+                    amount: row.get(6)?,
                 })
             })
             .map_err(|err| err.to_string())?;
@@ -175,23 +201,14 @@ async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry
 }
 
 #[tauri::command]
-async fn get_today_total(app_handle: tauri::AppHandle) -> Result<i64, String> {
+async fn get_today_total(app_handle: tauri::AppHandle) -> Result<TodayTotals, String> {
     let db_path = resolve_db_path(&app_handle)?;
     let (start_ts, end_ts) = day_bounds_timestamps()?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_connection(db_path)?;
-        let total: i64 = conn
-            .query_row(
-                "SELECT COALESCE(SUM(duration), 0)
-                 FROM time_entries
-                 WHERE start_time >= ?1 AND start_time < ?2",
-                params![start_ts, end_ts],
-                |row| row.get(0),
-            )
-            .map_err(|err| err.to_string())?;
-
-        Ok::<_, String>(total)
+        let totals = query_totals_between(&conn, start_ts, end_ts)?;
+        Ok::<_, String>(totals)
     })
     .await
     .map_err(|err| err.to_string())?
@@ -203,6 +220,7 @@ async fn create_time_entry(
     project_name: String,
     start_time: i64,
     end_time: i64,
+    hourly_rate: Option<f64>,
 ) -> Result<TimeEntry, String> {
     if end_time <= start_time {
         return Err("End time must be after start time".into());
@@ -210,28 +228,51 @@ async fn create_time_entry(
 
     let db_path = resolve_db_path(&app_handle)?;
     let sanitized_name = sanitize_project_name(project_name);
+    let rate = sanitize_hourly_rate(hourly_rate.unwrap_or(0.0));
 
-    persist_time_entry(db_path, sanitized_name, start_time, end_time).await
+    persist_time_entry(db_path, sanitized_name, start_time, end_time, rate).await
 }
 
 #[tauri::command]
-async fn update_time_entry_name(
+async fn update_time_entry(
     app_handle: tauri::AppHandle,
     id: i64,
-    project_name: String,
-) -> Result<String, String> {
+    project_name: Option<String>,
+    hourly_rate: Option<f64>,
+) -> Result<TimeEntry, String> {
     let db_path = resolve_db_path(&app_handle)?;
-    let sanitized_name = sanitize_project_name(project_name);
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_connection(db_path)?;
+        let current = fetch_time_entry(&conn, id)?;
+
+        let updated_name = project_name
+            .map(sanitize_project_name)
+            .unwrap_or_else(|| current.project_name.clone());
+        let updated_rate = hourly_rate
+            .map(sanitize_hourly_rate)
+            .unwrap_or(current.hourly_rate);
+        let updated_amount = calculate_amount(current.duration, updated_rate);
+
         conn.execute(
-            "UPDATE time_entries SET project_name = ?1 WHERE id = ?2",
-            params![sanitized_name, id],
+            "UPDATE time_entries
+             SET project_name = ?1,
+                 hourly_rate = ?2,
+                 amount = ?3
+             WHERE id = ?4",
+            params![updated_name, updated_rate, updated_amount, id],
         )
         .map_err(|err| err.to_string())?;
 
-        Ok::<_, String>(sanitized_name)
+        Ok::<_, String>(TimeEntry {
+            id,
+            project_name: updated_name,
+            start_time: current.start_time,
+            end_time: current.end_time,
+            duration: current.duration,
+            hourly_rate: updated_rate,
+            amount: updated_amount,
+        })
     })
     .await
     .map_err(|err| err.to_string())?
@@ -261,14 +302,13 @@ async fn get_timer_status(app_handle: tauri::AppHandle) -> Result<TimerStatusPay
 async fn start_timer(
     app_handle: tauri::AppHandle,
     project_name: String,
+    hourly_rate: f64,
 ) -> Result<TimerStatusPayload, String> {
-    start_timer_internal(&app_handle, project_name)
+    start_timer_internal(&app_handle, project_name, hourly_rate)
 }
 
 #[tauri::command]
-async fn stop_timer(
-    app_handle: tauri::AppHandle,
-) -> Result<Option<TimeEntry>, String> {
+async fn stop_timer(app_handle: tauri::AppHandle) -> Result<Option<TimeEntry>, String> {
     stop_timer_internal(&app_handle).await
 }
 
@@ -282,13 +322,11 @@ async fn start_timer_from_tray(
     } else {
         project_name
     };
-    start_timer_internal(&app_handle, name)
+    start_timer_internal(&app_handle, name, 0.0)
 }
 
 #[tauri::command]
-async fn stop_timer_from_tray(
-    app_handle: tauri::AppHandle,
-) -> Result<Option<TimeEntry>, String> {
+async fn stop_timer_from_tray(app_handle: tauri::AppHandle) -> Result<Option<TimeEntry>, String> {
     stop_timer_internal(&app_handle).await
 }
 
@@ -322,7 +360,7 @@ pub fn run() {
             get_today_entries,
             get_today_total,
             create_time_entry,
-            update_time_entry_name,
+            update_time_entry,
             delete_time_entry,
             get_timer_status,
             start_timer,
@@ -345,19 +383,19 @@ pub fn run() {
 fn start_timer_internal(
     app_handle: &AppHandle,
     project_name: String,
+    hourly_rate: f64,
 ) -> Result<TimerStatusPayload, String> {
     let timer_state = app_handle.state::<TimerState>();
     let sanitized_name = sanitize_project_name(project_name);
+    let sanitized_rate = sanitize_hourly_rate(hourly_rate);
     let start_time = current_unix_timestamp();
-    let status = timer_state.start(sanitized_name, start_time)?;
+    let status = timer_state.start(sanitized_name, start_time, sanitized_rate)?;
     refresh_tray(app_handle).map_err(|err| err.to_string())?;
     emit_timer_status(app_handle, &status);
     Ok(status)
 }
 
-async fn stop_timer_internal(
-    app_handle: &AppHandle,
-) -> Result<Option<TimeEntry>, String> {
+async fn stop_timer_internal(app_handle: &AppHandle) -> Result<Option<TimeEntry>, String> {
     let timer_state = app_handle.state::<TimerState>();
     let Some(active) = timer_state.take_active() else {
         return Err("No timer is currently running".into());
@@ -366,9 +404,14 @@ async fn stop_timer_internal(
     let end_time = current_unix_timestamp().max(active.start_time + 1);
     let db_path = resolve_db_path(app_handle)?;
 
-    let entry =
-        persist_time_entry(db_path, active.project_name.clone(), active.start_time, end_time)
-            .await?;
+    let entry = persist_time_entry(
+        db_path,
+        active.project_name.clone(),
+        active.start_time,
+        end_time,
+        active.hourly_rate,
+    )
+    .await?;
 
     let status = timer_state.status();
     refresh_tray(app_handle).map_err(|err| err.to_string())?;
@@ -397,15 +440,17 @@ async fn persist_time_entry(
     project_name: String,
     start_time: i64,
     end_time: i64,
+    hourly_rate: f64,
 ) -> Result<TimeEntry, String> {
     let duration = end_time - start_time;
+    let amount = calculate_amount(duration, hourly_rate);
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_connection(db_path)?;
         conn.execute(
-            "INSERT INTO time_entries (project_name, start_time, end_time, duration)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![project_name, start_time, end_time, duration],
+            "INSERT INTO time_entries (project_name, start_time, end_time, duration, hourly_rate, amount)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![project_name, start_time, end_time, duration, hourly_rate, amount],
         )
         .map_err(|err| err.to_string())?;
 
@@ -417,6 +462,8 @@ async fn persist_time_entry(
             start_time,
             end_time,
             duration,
+            hourly_rate,
+            amount,
         })
     })
     .await
@@ -427,7 +474,30 @@ fn open_connection(db_path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
     conn.execute(CREATE_TIME_ENTRIES_TABLE_SQL, [])
         .map_err(|err| err.to_string())?;
+    ensure_rate_columns(&conn)?;
     Ok(conn)
+}
+
+fn fetch_time_entry(conn: &Connection, id: i64) -> Result<TimeEntry, String> {
+    conn
+        .query_row(
+            "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
+             FROM time_entries
+             WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(TimeEntry {
+                    id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    start_time: row.get(2)?,
+                    end_time: row.get(3)?,
+                    duration: row.get(4)?,
+                    hourly_rate: row.get(5)?,
+                    amount: row.get(6)?,
+                })
+            },
+        )
+        .map_err(|err| err.to_string())
 }
 
 fn database_migrations() -> Vec<Migration> {
@@ -466,11 +536,11 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         timer_state.status()
     };
     let app_handle = app.handle();
-    let today_total = current_today_total(&app_handle).map_err(to_tauri_error)?;
+    let today_total = current_today_totals(&app_handle).map_err(to_tauri_error)?;
     let initial_menu = build_tray_menu(
         &app_handle,
         &initial_status,
-        today_total,
+        today_total.total_seconds,
         is_main_window_visible(&app_handle),
     )?;
 
@@ -482,7 +552,7 @@ fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_STATUS_ID => {}
             MENU_START_ID => {
-                let _ = start_timer_internal(app, "Quick Task".to_string());
+                let _ = start_timer_internal(app, "Quick Task".to_string(), 0.0);
             }
             MENU_STOP_ID => {
                 let app_handle = app.clone();
@@ -522,9 +592,9 @@ fn refresh_tray(app: &AppHandle) -> tauri::Result<()> {
         let timer_state = app.state::<TimerState>();
         timer_state.status()
     };
-    let total = current_today_total(app).map_err(to_tauri_error)?;
+    let totals = current_today_totals(app).map_err(to_tauri_error)?;
 
-    apply_tray_updates(app, &status, total)
+    apply_tray_updates(app, &status, totals.total_seconds)
 }
 
 fn apply_tray_updates(
@@ -547,8 +617,12 @@ fn apply_tray_updates(
         } else {
             tray.set_tooltip(Some(tooltip.as_str()))?;
         }
-        let menu =
-            build_tray_menu(app, status, today_total_seconds, is_main_window_visible(app))?;
+        let menu = build_tray_menu(
+            app,
+            status,
+            today_total_seconds,
+            is_main_window_visible(app),
+        )?;
         tray.set_menu(Some(menu))?;
     }
 
@@ -576,7 +650,11 @@ fn build_tray_menu<R: Runtime>(
     let stop_item = MenuItemBuilder::with_id(MENU_STOP_ID, "Stop Timer")
         .enabled(status.is_running)
         .build(app)?;
-    let toggle_label = if window_visible { "Hide Window" } else { "Show Window" };
+    let toggle_label = if window_visible {
+        "Hide Window"
+    } else {
+        "Show Window"
+    };
     let toggle_item = MenuItemBuilder::with_id(MENU_TOGGLE_WINDOW_ID, toggle_label).build(app)?;
     let quit_item = MenuItemBuilder::with_id(MENU_QUIT_ID, "Quit").build(app)?;
 
@@ -610,6 +688,14 @@ fn sanitize_project_name(project_name: String) -> String {
     }
 }
 
+fn sanitize_hourly_rate(rate: f64) -> f64 {
+    if rate.is_finite() {
+        rate.max(0.0)
+    } else {
+        0.0
+    }
+}
+
 fn current_unix_timestamp() -> i64 {
     Utc::now().timestamp()
 }
@@ -635,23 +721,83 @@ fn format_duration(total_seconds: i64) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}")
 }
 
-fn current_today_total(app: &AppHandle) -> Result<i64, String> {
+fn calculate_amount(duration_seconds: i64, hourly_rate: f64) -> f64 {
+    let hours = duration_seconds as f64 / 3600.0;
+    let raw_amount = hours * hourly_rate;
+    (raw_amount * 100.0).round() / 100.0
+}
+
+fn current_today_totals(app: &AppHandle) -> Result<TodayTotals, String> {
     let db_path = resolve_db_path(app)?;
     let (start_ts, end_ts) = day_bounds_timestamps()?;
     let conn = open_connection(db_path)?;
-    let total: i64 = conn
-        .query_row(
-            "SELECT COALESCE(SUM(duration), 0)
-             FROM time_entries
-             WHERE start_time >= ?1 AND start_time < ?2",
-            params![start_ts, end_ts],
-            |row| row.get(0),
-        )
-        .map_err(|err| err.to_string())?;
-
-    Ok(total)
+    query_totals_between(&conn, start_ts, end_ts)
 }
 
 fn to_tauri_error(message: String) -> tauri::Error {
     tauri::Error::from(io::Error::new(io::ErrorKind::Other, message))
+}
+
+fn query_totals_between(
+    conn: &Connection,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<TodayTotals, String> {
+    conn.query_row(
+        "SELECT
+                COALESCE(SUM(duration), 0) as total_duration,
+                COALESCE(SUM(amount), 0) as total_amount
+             FROM time_entries
+             WHERE start_time >= ?1 AND start_time < ?2",
+        params![start_ts, end_ts],
+        |row| {
+            Ok(TodayTotals {
+                total_seconds: row.get(0)?,
+                total_amount: row.get(1)?,
+            })
+        },
+    )
+    .map_err(|err| err.to_string())
+}
+
+fn ensure_rate_columns(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(time_entries)")
+        .map_err(|err| err.to_string())?;
+    let mut has_hourly_rate = false;
+    let mut has_amount = false;
+    let rows = stmt
+        .query_map([], |row| {
+            let name: String = row.get(1)?;
+            Ok(name)
+        })
+        .map_err(|err| err.to_string())?;
+
+    for col in rows {
+        let name = col.map_err(|err| err.to_string())?;
+        if name == "hourly_rate" {
+            has_hourly_rate = true;
+        }
+        if name == "amount" {
+            has_amount = true;
+        }
+    }
+
+    if !has_hourly_rate {
+        conn.execute(
+            "ALTER TABLE time_entries ADD COLUMN hourly_rate REAL NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    if !has_amount {
+        conn.execute(
+            "ALTER TABLE time_entries ADD COLUMN amount REAL NOT NULL DEFAULT 0",
+            [],
+        )
+        .map_err(|err| err.to_string())?;
+    }
+
+    Ok(())
 }

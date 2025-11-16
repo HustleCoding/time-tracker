@@ -1,6 +1,7 @@
 import type { KeyboardEvent } from "react";
 import type { TimeEntry } from "../types/time-entry";
 import { formatClockTime, formatDuration } from "../lib/time";
+import { formatCurrency } from "../lib/currency";
 
 type EntriesSectionProps = {
   loading: boolean;
@@ -8,7 +9,9 @@ type EntriesSectionProps = {
   isRefreshing: boolean;
   editingId: number | null;
   editingName: string;
+  editingRate: string;
   onEditingNameChange: (value: string) => void;
+  onEditingRateChange: (value: string) => void;
   onEditKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   beginEditing: (entry: TimeEntry) => void;
   cancelEditing: () => void;
@@ -23,7 +26,9 @@ export function EntriesSection({
   isRefreshing,
   editingId,
   editingName,
-  onEditingNameChange,
+  editingRate,
+        onEditingNameChange,
+        onEditingRateChange,
   onEditKeyDown,
   beginEditing,
   cancelEditing,
@@ -65,15 +70,35 @@ export function EntriesSection({
               <div className="entry-main">
                 {editingId === entry.id ? (
                   <div className="edit-panel">
-                    <input
-                      className="edit-input"
-                      value={editingName}
-                      onChange={(event) =>
-                        onEditingNameChange(event.target.value)
-                      }
-                      onKeyDown={onEditKeyDown}
-                      autoFocus
-                    />
+                    <label className="timer-field timer-field--project edit-field-inline">
+                      <span className="timer-field__label">Project</span>
+                      <div className="edit-inline-row">
+                        <input
+                          className="edit-input edit-input--inline"
+                          value={editingName}
+                          onChange={(event) =>
+                            onEditingNameChange(event.target.value)
+                          }
+                          onKeyDown={onEditKeyDown}
+                          autoFocus
+                        />
+                        <span className="timer-field__label">Hourly Rate</span>
+                        <div className="rate-input-group">
+                          <span className="rate-input-group__prefix">$</span>
+                          <input
+                            className="rate-input"
+                            type="text"
+                            inputMode="decimal"
+                            value={editingRate}
+                            onChange={(event) =>
+                              onEditingRateChange(event.target.value)
+                            }
+                            onKeyDown={onEditKeyDown}
+                          />
+                          <span className="rate-input-group__suffix">/hr</span>
+                        </div>
+                      </div>
+                    </label>
                     <div className="edit-actions">
                       <button
                         type="button"
@@ -94,10 +119,18 @@ export function EntriesSection({
                 ) : (
                   <>
                     <span className="entry-title">{entry.projectName}</span>
-                    <span className="entry-meta">
-                      {formatClockTime(entry.startTime)} –{" "}
-                      {formatClockTime(entry.endTime)} ·{" "}
-                      {formatDuration(entry.duration)}
+                    <div className="entry-metrics">
+                      <span className="entry-meta">
+                        {formatClockTime(entry.startTime)} –{" "}
+                        {formatClockTime(entry.endTime)} ·{" "}
+                        {formatDuration(entry.duration)}
+                      </span>
+                      <span className="entry-amount">
+                        {formatCurrency(entry.amount)}
+                      </span>
+                    </div>
+                    <span className="entry-rate">
+                      Rate: {formatCurrency(entry.hourlyRate)} / hr
                     </span>
                   </>
                 )}

@@ -15,21 +15,25 @@ function App() {
     setProjectName,
     isRunning,
     elapsedSeconds,
-    todayTotal,
+    todayTotalSeconds,
+    todayTotalAmount,
     entries,
     loading,
     isRefreshing,
     error,
     setError,
+    hourlyRate,
+    setHourlyRate,
     refreshEntries,
     startTimer,
     stopTimer,
     deleteEntry,
-    updateEntryName,
+    updateEntryDetails,
   } = useTimeTracker();
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editingName, setEditingName] = useState("");
+  const [editingRate, setEditingRate] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
 
   const confirmDelete = async () => {
@@ -52,11 +56,13 @@ function App() {
   const beginEditing = (entry: TimeEntry) => {
     setEditingId(entry.id);
     setEditingName(entry.projectName);
+    setEditingRate(entry.hourlyRate.toString());
   };
 
   const cancelEditing = () => {
     setEditingId(null);
     setEditingName("");
+    setEditingRate("");
   };
 
   const saveEditing = async () => {
@@ -70,8 +76,19 @@ function App() {
       return;
     }
 
+    const rateInput = editingRate.trim();
+    const parsedRate = rateInput.length === 0 ? 0 : Number(rateInput);
+    if (Number.isNaN(parsedRate)) {
+      setError("Hourly rate must be a valid number.");
+      return;
+    }
+    if (parsedRate < 0) {
+      setError("Hourly rate cannot be negative.");
+      return;
+    }
+
     try {
-      await updateEntryName(editingId, trimmed);
+      await updateEntryDetails(editingId, trimmed, parsedRate);
       cancelEditing();
     } catch {
       // hook already surfaces the error state
@@ -102,17 +119,22 @@ function App() {
             Track today&apos;s work with a simple timer.
           </p>
         </div>
-        <TodayTotalCard totalSeconds={todayTotal} />
+        <TodayTotalCard
+          totalSeconds={todayTotalSeconds}
+          totalAmount={todayTotalAmount}
+        />
       </header>
 
       {error && <div className="error-banner">{error}</div>}
 
       <TimerCard
         projectName={projectName}
+        hourlyRate={hourlyRate}
         isRunning={isRunning}
         timerDisplay={timerDisplay}
         isStartDisabled={isStartDisabled}
         onProjectNameChange={setProjectName}
+        onHourlyRateChange={setHourlyRate}
         onStart={() => {
           void startTimer();
         }}
@@ -127,7 +149,9 @@ function App() {
         isRefreshing={isRefreshing}
         editingId={editingId}
         editingName={editingName}
+        editingRate={editingRate}
         onEditingNameChange={setEditingName}
+        onEditingRateChange={setEditingRate}
         onEditKeyDown={onEditKeyDown}
         beginEditing={beginEditing}
         cancelEditing={cancelEditing}

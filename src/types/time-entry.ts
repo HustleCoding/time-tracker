@@ -4,4 +4,6 @@ export type TimeEntry = {
   startTime: number;
   endTime: number;
   duration: number;
+  hourlyRate: number;
+  amount: number;
 };
