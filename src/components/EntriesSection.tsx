@@ -1,7 +1,6 @@
 import type { KeyboardEvent } from "react";
 import type { TimeEntry } from "../types/time-entry";
-import { formatClockTime, formatDuration } from "../lib/time";
-import { formatCurrency } from "../lib/currency";
+import { formatDuration } from "../lib/time";
 
 type EntriesSectionProps = {
   loading: boolean;
@@ -15,149 +14,143 @@ type EntriesSectionProps = {
   onEditKeyDown: (event: KeyboardEvent<HTMLInputElement>) => void;
   beginEditing: (entry: TimeEntry) => void;
   cancelEditing: () => void;
-  saveEditing: () => void | Promise<void>;
+  saveEditing: () => void;
   onDeleteClick: (entry: TimeEntry) => void;
-  onRefresh: () => void | Promise<void>;
+  onRefresh: () => void;
 };
 
 export function EntriesSection({
   loading,
   entries,
-  isRefreshing,
   editingId,
   editingName,
   editingRate,
-        onEditingNameChange,
-        onEditingRateChange,
+  onEditingNameChange,
+  onEditingRateChange,
   onEditKeyDown,
   beginEditing,
   cancelEditing,
   saveEditing,
   onDeleteClick,
-  onRefresh,
 }: EntriesSectionProps) {
+  if (loading) {
+    return <div className="placeholder">Loading...</div>;
+  }
+
+  if (entries.length === 0) {
+    return (
+      <div className="placeholder">
+        No entries yet. Start the timer to track your work.
+      </div>
+    );
+  }
+
   return (
     <section className="entries-card">
-      <div className="entries-card__header">
-        <div>
-          <h2>Today&apos;s Entries</h2>
-          {isRefreshing && (
-            <span className="entries-card__hint">Refreshing…</span>
-          )}
-        </div>
-        <button
-          type="button"
-          className="button-ghost"
-          onClick={() => {
-            onRefresh();
-          }}
-          disabled={isRefreshing}
-        >
-          Refresh
-        </button>
-      </div>
+      <header className="entries-card__header">
+        <h2>Today&apos;s Log</h2>
+        <span className="entries-card__hint">
+          {entries.length} {entries.length === 1 ? "entry" : "entries"}
+        </span>
+      </header>
 
-      {loading ? (
-        <p className="placeholder">Loading entries…</p>
-      ) : entries.length === 0 ? (
-        <p className="placeholder">
-          No entries yet. Start the timer and your work will appear here.
-        </p>
-      ) : (
-        <ul className="entries-list">
-          {entries.map((entry) => (
-            <li key={entry.id} className="entry-row">
-              <div className="entry-main">
-                {editingId === entry.id ? (
-                  <div className="edit-panel">
-                    <label className="timer-field timer-field--project edit-field-inline">
-                      <span className="timer-field__label">Project</span>
-                      <div className="edit-inline-row">
-                        <input
-                          className="edit-input edit-input--inline"
-                          value={editingName}
-                          onChange={(event) =>
-                            onEditingNameChange(event.target.value)
-                          }
-                          onKeyDown={onEditKeyDown}
-                          autoFocus
-                        />
-                        <span className="timer-field__label">Hourly Rate</span>
-                        <div className="rate-input-group">
-                          <span className="rate-input-group__prefix">$</span>
-                          <input
-                            className="rate-input"
-                            type="text"
-                            inputMode="decimal"
-                            value={editingRate}
-                            onChange={(event) =>
-                              onEditingRateChange(event.target.value)
-                            }
-                            onKeyDown={onEditKeyDown}
-                          />
-                          <span className="rate-input-group__suffix">/hr</span>
-                        </div>
-                      </div>
-                    </label>
-                    <div className="edit-actions">
-                      <button
-                        type="button"
-                        className="button-ghost"
-                        onClick={cancelEditing}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="button-primary"
-                        onClick={saveEditing}
-                      >
-                        Save
-                      </button>
+      <ul className="entries-list">
+        {entries.map((entry) => {
+          const isEditing = editingId === entry.id;
+
+          if (isEditing) {
+            return (
+              <li key={entry.id} className="entry-row">
+                <div className="edit-panel">
+                  <div className="entry-edit-inputs">
+                    <input
+                      className="edit-input"
+                      type="text"
+                      value={editingName}
+                      onChange={(e) => onEditingNameChange(e.target.value)}
+                      onKeyDown={onEditKeyDown}
+                      placeholder="Project Name"
+                      autoFocus
+                    />
+                    <div className="rate-input-group">
+                      <span className="rate-input-group__prefix">$</span>
+                      <input
+                        className="rate-input"
+                        type="text"
+                        inputMode="decimal"
+                        value={editingRate}
+                        onChange={(e) => onEditingRateChange(e.target.value)}
+                        onKeyDown={onEditKeyDown}
+                        placeholder="0"
+                      />
                     </div>
                   </div>
-                ) : (
-                  <>
-                    <span className="entry-title">{entry.projectName}</span>
-                    <div className="entry-metrics">
-                      <span className="entry-meta">
-                        {formatClockTime(entry.startTime)} –{" "}
-                        {formatClockTime(entry.endTime)} ·{" "}
-                        {formatDuration(entry.duration)}
-                      </span>
-                      <span className="entry-amount">
-                        {formatCurrency(entry.amount)}
-                      </span>
-                    </div>
-                    <span className="entry-rate">
-                      Rate: {formatCurrency(entry.hourlyRate)} / hr
-                    </span>
-                  </>
-                )}
+                  <div className="entry-actions entry-actions--editing">
+                    <button
+                      className="button-ghost"
+                      onClick={saveEditing}
+                      title="Save"
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="button-ghost"
+                      onClick={cancelEditing}
+                      title="Cancel"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </li>
+            );
+          }
+
+          return (
+            <li key={entry.id} className="entry-row">
+              <div className="entry-main">
+                <div className="entry-title">{entry.projectName}</div>
+                <div className="entry-meta">
+                  {new Date(entry.startTime * 1000).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}{" "}
+                  -{" "}
+                  {new Date(entry.endTime * 1000).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </div>
               </div>
 
-              {editingId === entry.id ? null : (
+              <div className="entry-metrics">
+                <div className="entry-amount">
+                  {formatDuration(entry.duration)}
+                </div>
+                <div className="entry-rate">
+                  ${entry.amount.toFixed(2)}
+                </div>
                 <div className="entry-actions">
                   <button
-                    type="button"
                     className="button-ghost"
                     onClick={() => beginEditing(entry)}
+                    title="Edit"
                   >
                     Edit
                   </button>
                   <button
-                    type="button"
                     className="button-ghost button-ghost--danger"
                     onClick={() => onDeleteClick(entry)}
+                    title="Delete"
                   >
                     Delete
                   </button>
                 </div>
-              )}
+              </div>
             </li>
-          ))}
-        </ul>
-      )}
+          );
+        })}
+      </ul>
     </section>
   );
 }
