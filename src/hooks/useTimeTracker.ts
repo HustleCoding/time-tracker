@@ -14,6 +14,15 @@ type RawTimeEntry = {
   amount: number;
 };
 
+type OverlapWarning = {
+  overlapping_entries: RawTimeEntry[];
+};
+
+type UpdateResult = {
+  entry: RawTimeEntry;
+  overlap_warning?: OverlapWarning;
+};
+
 const toTimeEntry = (raw: RawTimeEntry): TimeEntry => ({
   id: raw.id,
   projectName: raw.project_name,
@@ -268,6 +277,7 @@ export function useTimeTracker() {
       try {
         await invoke("delete_time_entry", { id });
         await refreshEntries();
+        setHistoryEntries((prev) => prev.filter((entry) => entry.id !== id));
         setError(null);
       } catch (err) {
         setError(parseError(err));
@@ -278,19 +288,37 @@ export function useTimeTracker() {
   );
 
   const updateEntryDetails = useCallback(
-    async (id: number, projectNameValue: string, hourlyRateValue: number) => {
+    async (
+      id: number,
+      projectNameValue: string,
+      hourlyRateValue: number,
+      durationSeconds?: number
+    ) => {
       try {
-        const rawUpdated = await invoke<RawTimeEntry>("update_time_entry", {
+        const result = await invoke<UpdateResult>("update_time_entry", {
           id,
           projectName: projectNameValue,
           hourlyRate: hourlyRateValue,
+          duration: durationSeconds,
         });
-        const updated = toTimeEntry(rawUpdated);
+
+        const updated = toTimeEntry(result.entry);
 
         setEntries((previous) => previous.map((entry) => (entry.id === id ? updated : entry)));
+        setHistoryEntries((previous) => previous.map((entry) => (entry.id === id ? updated : entry)));
         await loadTodayTotals();
         setError(null);
-        return updated;
+
+        // Return overlap warning if present
+        if (result.overlap_warning) {
+          return {
+            overlap_warning: {
+              overlapping_entries: result.overlap_warning.overlapping_entries.map(toTimeEntry)
+            }
+          };
+        }
+
+        return undefined;
       } catch (err) {
         setError(parseError(err));
         throw err;

@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "time-tracker",
+        "title": "Time Tracker",
         "width": 800,
         "height": 600
       }

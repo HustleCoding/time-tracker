@@ -3,10 +3,10 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import { formatDuration } from "./lib/time";
 import type { TimeEntry } from "./types/time-entry";
-import { TodayTotalCard } from "./components/TodayTotalCard";
-import { TimerCard } from "./components/TimerCard";
+import { Sidebar } from "./components/Sidebar";
 import { EntriesSection } from "./components/EntriesSection";
 import { DeleteDialog } from "./components/DeleteDialog";
+import { EditEntryModal } from "./components/EditEntryModal";
 import { HistoryView } from "./components/HistoryView";
 import { useTimeTracker } from "./hooks/useTimeTracker";
 
@@ -38,10 +38,10 @@ function App() {
   } = useTimeTracker();
 
   const [view, setView] = useState<"timer" | "history">("timer");
-  const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingName, setEditingName] = useState("");
-  const [editingRate, setEditingRate] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [editTarget, setEditTarget] = useState<TimeEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const confirmDelete = async () => {
     if (!deleteTarget) {
@@ -60,57 +60,38 @@ function App() {
     setDeleteTarget(null);
   };
 
-  const beginEditing = (entry: TimeEntry) => {
-    setEditingId(entry.id);
-    setEditingName(entry.projectName);
-    setEditingRate(entry.hourlyRate.toString());
+  const openEditModal = (entry: TimeEntry) => {
+    setEditTarget(entry);
   };
 
-  const cancelEditing = () => {
-    setEditingId(null);
-    setEditingName("");
-    setEditingRate("");
+  const closeEditModal = () => {
+    setEditTarget(null);
+    setIsSaving(false);
   };
 
-  const saveEditing = async () => {
-    if (editingId === null) {
-      return;
-    }
-
-    const trimmed = editingName.trim();
-    if (trimmed.length === 0) {
-      setError("Project name cannot be empty.");
-      return;
-    }
-
-    const rateInput = editingRate.trim();
-    const parsedRate = rateInput.length === 0 ? 0 : Number(rateInput);
-    if (Number.isNaN(parsedRate)) {
-      setError("Hourly rate must be a valid number.");
-      return;
-    }
-    if (parsedRate < 0) {
-      setError("Hourly rate cannot be negative.");
-      return;
-    }
-
+  const saveEdit = async (
+    id: number,
+    projectName: string,
+    hourlyRate: number,
+    durationSeconds: number
+  ) => {
+    setIsSaving(true);
     try {
-      await updateEntryDetails(editingId, trimmed, parsedRate);
-      cancelEditing();
+      const result = await updateEntryDetails(id, projectName, hourlyRate, durationSeconds);
+
+      if (result?.overlap_warning) {
+        // Return the overlap warning to the modal
+        return result;
+      }
+
+      // If no overlap, close the modal
+      closeEditModal();
+      return undefined;
     } catch {
       // hook already surfaces the error state
-    }
-  };
-
-  const onEditKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void saveEditing();
-    }
-
-    if (event.key === "Escape") {
-      event.preventDefault();
-      cancelEditing();
+      throw new Error("Failed to update entry");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -143,114 +124,89 @@ function App() {
   }, [isRunning, isStartDisabled, view, startTimer, stopTimer, setProjectName]);
 
   return (
-    <main className="app">
-      <header className="app__header">
-        <div className="app__title-group">
-          <div className="app__brand">
-            <img
-              src="/logo.svg"
-              alt="Time Tracker logo"
-              className="app__logo"
-              draggable={false}
-            />
-            <div className="app__titles">
-              <h1>Time Tracker</h1>
-              <p className="app__subtitle">Minimal, focused time tracking</p>
+    <div className="app">
+      <div className="app__layout">
+        <Sidebar
+          view={view}
+          onViewChange={setView}
+          projectName={projectName}
+          hourlyRate={hourlyRate}
+          isRunning={isRunning}
+          timerDisplay={timerDisplay}
+          isStartDisabled={isStartDisabled}
+          isStarting={isStarting}
+          isStopping={isStopping}
+          todayTotalSeconds={todayTotalSeconds}
+          todayTotalAmount={todayTotalAmount}
+          onProjectNameChange={setProjectName}
+          onHourlyRateChange={setHourlyRate}
+          onStart={() => {
+            void startTimer();
+          }}
+          onStop={() => {
+            void stopTimer();
+          }}
+          isCollapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        />
+
+        <main className="app__main-content">
+          {error && (
+            <div className="error-banner">
+              <span>{error}</span>
+              <button
+                className="error-banner__close"
+                onClick={clearError}
+                aria-label="Dismiss error"
+              >
+                ×
+              </button>
+            </div>
+          )}
+
+          <div className="view-switcher">
+            <div className={`view ${view === "timer" ? "view--active" : ""}`}>
+              <EntriesSection
+                loading={loading}
+                entries={entries}
+                isRefreshing={isRefreshing}
+                editingId={null}
+                editingName=""
+                editingRate=""
+                onEditingNameChange={() => {}}
+                onEditingRateChange={() => {}}
+                onEditKeyDown={() => {}}
+                beginEditing={openEditModal}
+                cancelEditing={() => {}}
+                saveEditing={() => {}}
+                onDeleteClick={(entry) => {
+                  setDeleteTarget(entry);
+                }}
+                onRefresh={() => {
+                  void refreshEntries();
+                }}
+              />
+            </div>
+
+            <div className={`view ${view === "history" ? "view--active" : ""}`}>
+              <HistoryView
+                entries={historyEntries}
+                loading={loading}
+                onLoadHistory={loadHistory}
+                onDeleteClick={(entry) => setDeleteTarget(entry)}
+                editingId={null}
+                editingName=""
+                editingRate=""
+                onEditingNameChange={() => {}}
+                onEditingRateChange={() => {}}
+                onEditKeyDown={() => {}}
+                beginEditing={openEditModal}
+                cancelEditing={() => {}}
+                saveEditing={() => {}}
+              />
             </div>
           </div>
-          <div className="app__tabs">
-            <button
-              className={`app__tab ${view === "timer" ? "app__tab--active" : ""}`}
-              onClick={() => setView("timer")}
-            >
-              Timer
-            </button>
-            <button
-              className={`app__tab ${view === "history" ? "app__tab--active" : ""}`}
-              onClick={() => setView("history")}
-            >
-              History
-            </button>
-          </div>
-        </div>
-        <TodayTotalCard
-          totalSeconds={todayTotalSeconds}
-          totalAmount={todayTotalAmount}
-        />
-      </header>
-
-      {error && (
-        <div className="error-banner">
-          <span>{error}</span>
-          <button
-            className="error-banner__close"
-            onClick={clearError}
-            aria-label="Dismiss error"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      <div className="view-switcher">
-        <div className={`view ${view === "timer" ? "view--active" : ""}`}>
-          <TimerCard
-            projectName={projectName}
-            hourlyRate={hourlyRate}
-            isRunning={isRunning}
-            timerDisplay={timerDisplay}
-            isStartDisabled={isStartDisabled}
-            isStarting={isStarting}
-            isStopping={isStopping}
-            onProjectNameChange={setProjectName}
-            onHourlyRateChange={setHourlyRate}
-            onStart={() => {
-              void startTimer();
-            }}
-            onStop={() => {
-              void stopTimer();
-            }}
-          />
-
-          <EntriesSection
-            loading={loading}
-            entries={entries}
-            isRefreshing={isRefreshing}
-            editingId={editingId}
-            editingName={editingName}
-            editingRate={editingRate}
-            onEditingNameChange={setEditingName}
-            onEditingRateChange={setEditingRate}
-            onEditKeyDown={onEditKeyDown}
-            beginEditing={beginEditing}
-            cancelEditing={cancelEditing}
-            saveEditing={saveEditing}
-            onDeleteClick={(entry) => {
-              setDeleteTarget(entry);
-            }}
-            onRefresh={() => {
-              void refreshEntries();
-            }}
-          />
-        </div>
-
-        <div className={`view ${view === "history" ? "view--active" : ""}`}>
-          <HistoryView
-            entries={historyEntries}
-            loading={loading}
-            onLoadHistory={loadHistory}
-            onDeleteClick={(entry) => setDeleteTarget(entry)}
-            editingId={editingId}
-            editingName={editingName}
-            editingRate={editingRate}
-            onEditingNameChange={setEditingName}
-            onEditingRateChange={setEditingRate}
-            onEditKeyDown={onEditKeyDown}
-            beginEditing={beginEditing}
-            cancelEditing={cancelEditing}
-            saveEditing={saveEditing}
-          />
-        </div>
+        </main>
       </div>
 
       <DeleteDialog
@@ -260,7 +216,14 @@ function App() {
           void confirmDelete();
         }}
       />
-    </main>
+
+      <EditEntryModal
+        entry={editTarget}
+        onCancel={closeEditModal}
+        onSave={saveEdit}
+        isSaving={isSaving}
+      />
+    </div>
   );
 }
 

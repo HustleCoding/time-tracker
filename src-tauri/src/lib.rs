@@ -272,13 +272,25 @@ async fn create_time_entry(
     persist_time_entry(db_path, sanitized_name, start_time, end_time, rate).await
 }
 
+#[derive(Debug, Serialize)]
+struct UpdateResult {
+    entry: TimeEntry,
+    overlap_warning: Option<OverlapWarning>,
+}
+
+#[derive(Debug, Serialize)]
+struct OverlapWarning {
+    overlapping_entries: Vec<TimeEntry>,
+}
+
 #[tauri::command]
 async fn update_time_entry(
     app_handle: tauri::AppHandle,
     id: i64,
     project_name: Option<String>,
     hourly_rate: Option<f64>,
-) -> Result<TimeEntry, String> {
+    duration: Option<i64>,
+) -> Result<UpdateResult, String> {
     let db_path = resolve_db_path(&app_handle)?;
 
     tauri::async_runtime::spawn_blocking(move || {
@@ -291,26 +303,47 @@ async fn update_time_entry(
         let updated_rate = hourly_rate
             .map(sanitize_hourly_rate)
             .unwrap_or(current.hourly_rate);
-        let updated_amount = calculate_amount(current.duration, updated_rate);
+
+        // Calculate new duration and end_time
+        let updated_duration = duration.unwrap_or(current.duration);
+        let updated_end_time = current.start_time + updated_duration;
+        let updated_amount = calculate_amount(updated_duration, updated_rate);
+
+        // Check for overlapping entries (excluding current entry)
+        let overlapping = check_overlapping_entries(&conn, id, current.start_time, updated_end_time)?;
+        let overlap_warning = if !overlapping.is_empty() {
+            Some(OverlapWarning {
+                overlapping_entries: overlapping,
+            })
+        } else {
+            None
+        };
 
         conn.execute(
             "UPDATE time_entries
              SET project_name = ?1,
                  hourly_rate = ?2,
-                 amount = ?3
-             WHERE id = ?4",
-            params![updated_name, updated_rate, updated_amount, id],
+                 duration = ?3,
+                 end_time = ?4,
+                 amount = ?5
+             WHERE id = ?6",
+            params![updated_name, updated_rate, updated_duration, updated_end_time, updated_amount, id],
         )
         .map_err(|err| err.to_string())?;
 
-        Ok::<_, String>(TimeEntry {
+        let entry = TimeEntry {
             id,
             project_name: updated_name,
             start_time: current.start_time,
-            end_time: current.end_time,
-            duration: current.duration,
+            end_time: updated_end_time,
+            duration: updated_duration,
             hourly_rate: updated_rate,
             amount: updated_amount,
+        };
+
+        Ok::<_, String>(UpdateResult {
+            entry,
+            overlap_warning,
         })
     })
     .await
@@ -1007,4 +1040,42 @@ fn ensure_rate_columns(conn: &Connection) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn check_overlapping_entries(
+    conn: &Connection,
+    current_id: i64,
+    start_time: i64,
+    end_time: i64,
+) -> Result<Vec<TimeEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
+             FROM time_entries
+             WHERE id != ?1
+             AND NOT (end_time <= ?2 OR start_time >= ?3)
+             ORDER BY start_time ASC",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map(params![current_id, start_time, end_time], |row| {
+            Ok(TimeEntry {
+                id: row.get(0)?,
+                project_name: row.get(1)?,
+                start_time: row.get(2)?,
+                end_time: row.get(3)?,
+                duration: row.get(4)?,
+                hourly_rate: row.get(5)?,
+                amount: row.get(6)?,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut entries = Vec::new();
+    for entry in rows {
+        entries.push(entry.map_err(|err| err.to_string())?);
+    }
+
+    Ok(entries)
 }
