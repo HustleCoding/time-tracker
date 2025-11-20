@@ -16,7 +16,8 @@ type EntriesSectionProps = {
   cancelEditing: () => void;
   saveEditing: () => void;
   onDeleteClick: (entry: TimeEntry) => void;
-  onRefresh: () => void;
+  title?: string;
+  onRefresh?: () => void;
 };
 
 export function EntriesSection({
@@ -32,15 +33,24 @@ export function EntriesSection({
   cancelEditing,
   saveEditing,
   onDeleteClick,
+  title = "Today's Log",
 }: EntriesSectionProps) {
   if (loading) {
-    return <div className="placeholder">Loading...</div>;
+    return <div className="placeholder">Loading entries...</div>;
   }
+
+  const isToday = title === "Today's Log";
 
   if (entries.length === 0) {
     return (
       <div className="placeholder">
-        No entries yet. Start the timer to track your work.
+        <p>{isToday ? "No time tracked today" : "No entries for this date"}</p>
+        {isToday && (
+          <p>
+            Enter a project name and press <strong>⌘/Ctrl+Enter</strong> to
+            start tracking
+          </p>
+        )}
       </div>
     );
   }
@@ -48,7 +58,7 @@ export function EntriesSection({
   return (
     <section className="entries-card">
       <header className="entries-card__header">
-        <h2>Today&apos;s Log</h2>
+        <h2>{title}</h2>
         <span className="entries-card__hint">
           {entries.length} {entries.length === 1 ? "entry" : "entries"}
         </span>

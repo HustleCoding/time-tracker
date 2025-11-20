@@ -4,6 +4,8 @@ type TimerCardProps = {
   isRunning: boolean;
   timerDisplay: string;
   isStartDisabled: boolean;
+  isStarting: boolean;
+  isStopping: boolean;
   onProjectNameChange: (value: string) => void;
   onHourlyRateChange: (value: string) => void;
   onStart: () => void | Promise<void>;
@@ -16,6 +18,8 @@ export function TimerCard({
   isRunning,
   timerDisplay,
   isStartDisabled,
+  isStarting,
+  isStopping,
   onProjectNameChange,
   onHourlyRateChange,
   onStart,
@@ -44,10 +48,11 @@ export function TimerCard({
               value={projectName}
               onChange={(event) => onProjectNameChange(event.target.value)}
               disabled={isRunning}
+              title={isRunning ? "Stop the timer to edit" : "Enter a project name to start tracking"}
             />
           </div>
           <div className="timer-field">
-            <div className="rate-input-group">
+            <div className="rate-input-group" title="Your hourly rate in USD">
               <span className="rate-input-group__prefix">$</span>
               <input
                 className="rate-input"
@@ -65,9 +70,22 @@ export function TimerCard({
           type="button"
           className={isRunning ? "button-stop" : "button-primary"}
           onClick={isRunning ? onStop : onStart}
-          disabled={isRunning ? false : isStartDisabled}
+          disabled={isRunning ? isStopping : isStartDisabled || isStarting}
+          title={
+            isRunning
+              ? "Stop timer (⌘/Ctrl+Enter)"
+              : isStartDisabled
+                ? "Enter a project name first"
+                : "Start timer (⌘/Ctrl+Enter)"
+          }
         >
-          {isRunning ? "Stop Timer" : "Start Timer"}
+          {isRunning
+            ? isStopping
+              ? "Stopping..."
+              : "Stop Timer"
+            : isStarting
+              ? "Starting..."
+              : "Start Timer"}
         </button>
       </div>
     </section>

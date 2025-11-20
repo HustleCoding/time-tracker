@@ -2,7 +2,7 @@ use std::{fs, io, path::PathBuf, sync::Mutex};
 
 use chrono::{Duration, Local, LocalResult, TimeZone, Utc};
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -10,6 +10,8 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
 use tauri_plugin_sql::{Migration, MigrationKind};
+
+mod pdf_generator;
 
 const DB_FILE_NAME: &str = "time_tracker.db";
 const DB_URL: &str = "sqlite:time_tracker.db";
@@ -42,6 +44,19 @@ pub struct TimeEntry {
     pub duration: i64,
     pub hourly_rate: f64,
     pub amount: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusinessInfo {
+    pub name: String,
+    pub address: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub client_name: Option<String>,
+    pub client_address: Option<String>,
+    pub client_email: Option<String>,
+    pub client_phone: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,8 +151,8 @@ struct TrayAssets {
 impl TrayAssets {
     fn load() -> tauri::Result<Self> {
         Ok(Self {
-            idle_icon: solid_icon_image(32, 32, [138, 138, 138, 255]),
-            running_icon: solid_icon_image(32, 32, [46, 204, 113, 255]),
+            idle_icon: build_tray_icon([234, 240, 255, 255], [79, 139, 255, 255]),
+            running_icon: build_tray_icon([234, 240, 255, 255], [46, 204, 113, 255]),
         })
     }
 }
@@ -166,38 +181,62 @@ async fn get_today_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry
 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open_connection(db_path)?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
-                 FROM time_entries
-                 WHERE start_time >= ?1 AND start_time < ?2
-                 ORDER BY start_time DESC",
-            )
-            .map_err(|err| err.to_string())?;
-
-        let rows = stmt
-            .query_map(params![start_ts, end_ts], |row| {
-                Ok(TimeEntry {
-                    id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    start_time: row.get(2)?,
-                    end_time: row.get(3)?,
-                    duration: row.get(4)?,
-                    hourly_rate: row.get(5)?,
-                    amount: row.get(6)?,
-                })
-            })
-            .map_err(|err| err.to_string())?;
-
-        let mut entries = Vec::new();
-        for entry in rows {
-            entries.push(entry.map_err(|err| err.to_string())?);
-        }
-
-        Ok::<_, String>(entries)
+        query_entries_between(&conn, start_ts, end_ts)
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn get_entries_in_range(
+    app_handle: tauri::AppHandle,
+    start_time: i64,
+    end_time: i64,
+) -> Result<Vec<TimeEntry>, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+        query_entries_between(&conn, start_time, end_time)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+fn query_entries_between(
+    conn: &Connection,
+    start_ts: i64,
+    end_ts: i64,
+) -> Result<Vec<TimeEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
+             FROM time_entries
+             WHERE start_time >= ?1 AND start_time < ?2
+             ORDER BY start_time DESC",
+        )
+        .map_err(|err| err.to_string())?;
+
+    let rows = stmt
+        .query_map(params![start_ts, end_ts], |row| {
+            Ok(TimeEntry {
+                id: row.get(0)?,
+                project_name: row.get(1)?,
+                start_time: row.get(2)?,
+                end_time: row.get(3)?,
+                duration: row.get(4)?,
+                hourly_rate: row.get(5)?,
+                amount: row.get(6)?,
+            })
+        })
+        .map_err(|err| err.to_string())?;
+
+    let mut entries = Vec::new();
+    for entry in rows {
+        entries.push(entry.map_err(|err| err.to_string())?);
+    }
+
+    Ok(entries)
 }
 
 #[tauri::command]
@@ -337,6 +376,117 @@ async fn toggle_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn get_all_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry>, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+
+        let mut stmt = conn
+            .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time DESC")
+            .map_err(|e| e.to_string())?;
+
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(TimeEntry {
+                    id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    start_time: row.get(2)?,
+                    end_time: row.get(3)?,
+                    duration: row.get(4)?,
+                    hourly_rate: row.get(5)?,
+                    amount: row.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn generate_invoice_pdf(
+    app_handle: tauri::AppHandle,
+    business_info: BusinessInfo,
+) -> Result<String, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    // Get all entries
+    let entries = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+
+        let mut stmt = conn
+            .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time ASC")
+            .map_err(|e| e.to_string())?;
+
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(TimeEntry {
+                    id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    start_time: row.get(2)?,
+                    end_time: row.get(3)?,
+                    duration: row.get(4)?,
+                    hourly_rate: row.get(5)?,
+                    amount: row.get(6)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        Ok::<Vec<TimeEntry>, String>(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Determine output path (Downloads folder)
+    let downloads_path = app_handle
+        .path()
+        .download_dir()
+        .map_err(|e| format!("Failed to get downloads directory: {}", e))?;
+
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("time_tracking_invoice_{}.pdf", timestamp);
+    let output_path = downloads_path.join(&filename);
+    let output_path_str = output_path.to_str().ok_or("Invalid path")?;
+
+    // Convert entries to pdf_generator format
+    let pdf_entries: Vec<pdf_generator::TimeEntry> = entries
+        .into_iter()
+        .map(|e| pdf_generator::TimeEntry {
+            id: e.id,
+            project_name: e.project_name,
+            start_time: e.start_time,
+            end_time: e.end_time,
+            duration: e.duration,
+            hourly_rate: e.hourly_rate,
+            amount: e.amount,
+        })
+        .collect();
+
+    let pdf_business_info = pdf_generator::BusinessInfo {
+        name: business_info.name,
+        address: business_info.address,
+        email: business_info.email,
+        phone: business_info.phone,
+        client_name: business_info.client_name,
+        client_address: business_info.client_address,
+        client_email: business_info.client_email,
+        client_phone: business_info.client_phone,
+    };
+
+    // Generate PDF
+    pdf_generator::generate_invoice(pdf_entries, pdf_business_info, output_path_str)?;
+
+    Ok(output_path_str.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -358,6 +508,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             initialize_database,
             get_today_entries,
+            get_entries_in_range,
             get_today_total,
             create_time_entry,
             update_time_entry,
@@ -367,7 +518,9 @@ pub fn run() {
             stop_timer,
             start_timer_from_tray,
             stop_timer_from_tray,
-            toggle_window
+            toggle_window,
+            get_all_entries,
+            generate_invoice_pdf
         ])
         .setup(|app| {
             let assets = TrayAssets::load()?;
@@ -670,13 +823,67 @@ fn build_tray_menu<R: Runtime>(
         .build()
 }
 
-fn solid_icon_image(width: u32, height: u32, color: [u8; 4]) -> Image<'static> {
-    let pixel_count = (width * height) as usize;
-    let mut data = vec![0u8; pixel_count * 4];
-    for chunk in data.chunks_exact_mut(4) {
-        chunk.copy_from_slice(&color);
+fn build_tray_icon(ring_color: [u8; 4], hand_color: [u8; 4]) -> Image<'static> {
+    let size: u32 = 32;
+    let len = (size * size * 4) as usize;
+    let mut data = vec![0u8; len];
+    let center = (size as f32 - 1.0) / 2.0;
+    let outer = 11.5f32;
+    let inner = outer - 2.4f32;
+    let hand_length = 9.0f32;
+    let hand_thickness = 1.3f32;
+
+    let set_px = |data: &mut [u8], x: u32, y: u32, color: [u8; 4]| {
+        let idx = ((y * size + x) * 4) as usize;
+        data[idx..idx + 4].copy_from_slice(&color);
+    };
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= outer && dist >= inner {
+                set_px(&mut data, x, y, ring_color);
+            }
+        }
     }
-    Image::new_owned(data, width, height)
+
+    // vertical hand
+    for y in 0..size {
+        for x in 0..size {
+            let dx = (x as f32 - center).abs();
+            let y_top = center - hand_length;
+            if dx <= hand_thickness && (y as f32) >= y_top && (y as f32) <= center {
+                set_px(&mut data, x, y, hand_color);
+            }
+        }
+    }
+
+    // horizontal hand
+    for y in 0..size {
+        for x in 0..size {
+            let dy = (y as f32 - center).abs();
+            let x_right = center + hand_length;
+            if dy <= hand_thickness && (x as f32) >= center && (x as f32) <= x_right {
+                set_px(&mut data, x, y, hand_color);
+            }
+        }
+    }
+
+    // center cap
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            if dist <= 2.0 {
+                set_px(&mut data, x, y, ring_color);
+            }
+        }
+    }
+
+    Image::new_owned(data, size, size)
 }
 
 fn sanitize_project_name(project_name: String) -> String {

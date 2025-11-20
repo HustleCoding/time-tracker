@@ -10,10 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "trayIcon": {
-      "iconPath": "icons/tray/timer-idle-32.png",
-      "tooltip": "Time Tracker"
-    },
     "windows": [
       {
         "title": "time-tracker",

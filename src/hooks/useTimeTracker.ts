@@ -67,6 +67,8 @@ export function useTimeTracker() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hourlyRate, setHourlyRate] = useState(loadStoredHourlyRate);
   const wasRunningRef = useRef(false);
@@ -217,7 +219,7 @@ export function useTimeTracker() {
   }, [hourlyRate]);
 
   const startTimer = useCallback(async () => {
-    if (isRunning || projectName.trim().length === 0) {
+    if (isRunning || projectName.trim().length === 0 || isStarting) {
       return;
     }
 
@@ -231,6 +233,7 @@ export function useTimeTracker() {
       return;
     }
 
+    setIsStarting(true);
     try {
       const status = await invoke<TimerStatus>("start_timer", {
         projectName,
@@ -239,21 +242,26 @@ export function useTimeTracker() {
       await applyStatus(status);
     } catch (err) {
       setError(parseError(err));
+    } finally {
+      setIsStarting(false);
     }
-  }, [applyStatus, isRunning, projectName, resolveHourlyRate]);
+  }, [applyStatus, isRunning, projectName, resolveHourlyRate, isStarting]);
 
   const stopTimer = useCallback(async () => {
-    if (!isRunning) {
+    if (!isRunning || isStopping) {
       return;
     }
 
+    setIsStopping(true);
     try {
       await invoke<TimeEntry | null>("stop_timer");
       await syncStatus();
     } catch (err) {
       setError(parseError(err));
+    } finally {
+      setIsStopping(false);
     }
-  }, [isRunning, syncStatus]);
+  }, [isRunning, isStopping, syncStatus]);
 
   const deleteEntry = useCallback(
     async (id: number) => {
@@ -291,6 +299,28 @@ export function useTimeTracker() {
     [loadTodayTotals]
   );
 
+  const [historyEntries, setHistoryEntries] = useState<TimeEntry[]>([]);
+
+  const loadHistory = useCallback(async (start: number, end: number) => {
+    setLoading(true);
+    try {
+      const rawEntries = await invoke<RawTimeEntry[]>("get_entries_in_range", {
+        startTime: start,
+        endTime: end,
+      });
+      setHistoryEntries(rawEntries.map(toTimeEntry));
+      setError(null);
+    } catch (err) {
+      setError(parseError(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
   return {
     projectName,
     setProjectName,
@@ -302,8 +332,11 @@ export function useTimeTracker() {
     entries,
     loading,
     isRefreshing,
+    isStarting,
+    isStopping,
     error,
     setError,
+    clearError,
     hourlyRate,
     setHourlyRate,
     refreshEntries,
@@ -311,5 +344,7 @@ export function useTimeTracker() {
     stopTimer,
     deleteEntry,
     updateEntryDetails,
+    historyEntries,
+    loadHistory,
   };
 }
