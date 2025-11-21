@@ -43,3 +43,26 @@ Shortcuts:
 
 ## Notes
 - If packaging for distribution, configure signing/notarization per platform after `pnpm tauri build`.
+
+## Unsigned release checklist (manual)
+- Bump version in `package.json` and `src-tauri/tauri.conf.json`.
+- `pnpm install && pnpm tauri build` (artifacts in `src-tauri/target/release/bundle/`).
+- Smoke-test the built app (timer/tray/history/invoice) from the bundle, not dev mode.
+- macOS: users must right-click → Open the first time (unsigned/not notarized). Windows: SmartScreen “More info → Run anyway.”
+- Zip and publish `.dmg`/`.msi`/`.AppImage` (or `.deb/.rpm`) on GitHub Releases with release notes and known unsigned warning.
+
+## Release notes template (unsigned)
+Title: `v{{version}} (unsigned)`
+
+Changes:
+- Brief bullet list of changes.
+
+Downloads:
+- macOS (unsigned): `time-tracker-{{version}}-macos.zip`
+  - Installation: unzip; drag `time-tracker.app` to Applications; first launch requires right-click → Open (Gatekeeper).
+- (If present) Windows: `.msi` / `.exe` — SmartScreen may warn; click More Info → Run anyway.
+- (If present) Linux: `.AppImage` or `.deb`/`.rpm`; may need `chmod +x` for AppImage.
+
+Notes:
+- Local-only: data (SQLite) and invoices are stored in the app data directory.
+- No auto-updates; download the latest release to upgrade.
