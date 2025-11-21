@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { EntriesSection } from "./EntriesSection";
 import { InvoiceDialog } from "./InvoiceDialog";
-import type { TimeEntry } from "../types/time-entry";
+import type { Invoice, TimeEntry } from "../types/time-entry";
 import { formatDuration } from "../lib/time";
 import { formatCurrency } from "../lib/currency";
+import { Toast } from "./Toast";
 
 type HistoryViewProps = {
   entries: TimeEntry[];
@@ -19,6 +21,9 @@ type HistoryViewProps = {
   beginEditing: (entry: TimeEntry) => void;
   cancelEditing: () => void;
   saveEditing: () => void;
+  isActive: boolean;
+  refreshSignal: number;
+  onInvoiceCreated?: (invoice: Invoice) => void;
 };
 
 export function HistoryView({
@@ -35,13 +40,21 @@ export function HistoryView({
   beginEditing,
   cancelEditing,
   saveEditing,
+  isActive,
+  refreshSignal,
+  onInvoiceCreated,
 }: HistoryViewProps) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showInvoiceDialog, setShowInvoiceDialog] = useState(false);
+  const [invoiceToast, setInvoiceToast] = useState<{ path: string } | null>(null);
   const totalDurationSeconds = entries.reduce((acc, entry) => acc + entry.duration, 0);
   const totalAmount = entries.reduce((acc, entry) => acc + entry.amount, 0);
 
   useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+
     const start = new Date(currentDate);
     start.setHours(0, 0, 0, 0);
     const end = new Date(currentDate);
@@ -51,7 +64,7 @@ export function HistoryView({
       Math.floor(start.getTime() / 1000),
       Math.floor(end.getTime() / 1000)
     );
-  }, [currentDate, onLoadHistory]);
+  }, [currentDate, onLoadHistory, refreshSignal, isActive]);
 
   const handlePrevDay = () => {
     const newDate = new Date(currentDate);
@@ -66,6 +79,29 @@ export function HistoryView({
   };
 
   const isToday = currentDate.toDateString() === new Date().toDateString();
+
+  const handleInvoiceOpened = (payload: { path: string; invoice: Invoice }) => {
+    setInvoiceToast({ path: payload.path });
+    onInvoiceCreated?.(payload.invoice);
+  };
+
+  const handleToastOpenAgain = async () => {
+    if (!invoiceToast) return;
+    try {
+      await invoke("open_file_in_default_app", { path: invoiceToast.path });
+    } catch {
+      // swallow; user can try again
+    }
+  };
+
+  const handleToastCopyPath = async () => {
+    if (!invoiceToast) return;
+    try {
+      await navigator.clipboard?.writeText(invoiceToast.path);
+    } catch {
+      // no-op if clipboard blocked
+    }
+  };
 
   return (
     <div className="history-view">
@@ -136,7 +172,20 @@ export function HistoryView({
       <InvoiceDialog
         isOpen={showInvoiceDialog}
         onClose={() => setShowInvoiceDialog(false)}
+        onInvoiceOpened={handleInvoiceOpened}
       />
+
+      {invoiceToast && (
+        <Toast
+          message="Invoice opened in your PDF viewer"
+          caption={invoiceToast.path}
+          actions={[
+            { label: "Open again", onClick: handleToastOpenAgain },
+            { label: "Copy path", onClick: handleToastCopyPath },
+          ]}
+          onDismiss={() => setInvoiceToast(null)}
+        />
+      )}
     </div>
   );
 }

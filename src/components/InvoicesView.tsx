@@ -1,47 +1,44 @@
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Invoice } from '../types/time-entry';
-import { InvoiceCard } from './InvoiceCard';
-import { InvoicePreviewModal } from './InvoicePreviewModal';
+import { useState, useEffect, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Invoice } from "../types/time-entry";
+import { InvoiceCard } from "./InvoiceCard";
+import { Toast } from "./Toast";
 
-export function InvoicesView() {
+type InvoicesViewProps = {
+  refreshSignal: number;
+};
+
+export function InvoicesView({ refreshSignal }: InvoicesViewProps) {
+  const parseError = (err: unknown) => (err instanceof Error ? err.message : String(err));
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [previewInvoice, setPreviewInvoice] = useState<Invoice | null>(null);
+  const [invoiceToast, setInvoiceToast] = useState<{ path: string } | null>(null);
 
-  useEffect(() => {
-    loadInvoices();
-  }, []);
-
-  const loadInvoices = async () => {
+  const loadInvoices = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await invoke<Invoice[]>('get_all_invoices');
+      const data = await invoke<Invoice[]>("get_all_invoices");
       setInvoices(data);
     } catch (err) {
-      setError(err as string);
+      setError(parseError(err));
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleDelete = async (invoiceId: number) => {
+  useEffect(() => {
+    void loadInvoices();
+  }, [loadInvoices, refreshSignal]);
+
+  const handlePreview = async (invoice: Invoice) => {
     try {
-      await invoke('delete_invoice', { id: invoiceId });
-      setInvoices(prev => prev.filter(inv => inv.id !== invoiceId));
+      await invoke("open_file_in_default_app", { path: invoice.filePath });
+      setInvoiceToast({ path: invoice.filePath });
     } catch (err) {
-      setError(`Failed to delete invoice: ${err}`);
+      setError(`Failed to open invoice: ${err}`);
     }
-  };
-
-  const handlePreview = (invoice: Invoice) => {
-    setPreviewInvoice(invoice);
-  };
-
-  const closePreview = () => {
-    setPreviewInvoice(null);
   };
 
   if (loading) {
@@ -98,16 +95,36 @@ export function InvoicesView() {
             key={invoice.id}
             invoice={invoice}
             onPreview={handlePreview}
-            onDelete={handleDelete}
           />
         ))}
       </div>
-
-      {previewInvoice && (
-        <InvoicePreviewModal
-          invoiceId={previewInvoice.id}
-          onClose={closePreview}
-          onDownload={() => {}}
+      {invoiceToast && (
+        <Toast
+          message="Invoice opened in your PDF viewer"
+          caption={invoiceToast.path}
+          actions={[
+            {
+              label: "Open again",
+              onClick: async () => {
+                try {
+                  await invoke("open_file_in_default_app", { path: invoiceToast.path });
+                } catch {
+                  /* ignore */
+                }
+              },
+            },
+            {
+              label: "Copy path",
+              onClick: async () => {
+                try {
+                  await navigator.clipboard?.writeText(invoiceToast.path);
+                } catch {
+                  /* ignore */
+                }
+              },
+            },
+          ]}
+          onDismiss={() => setInvoiceToast(null)}
         />
       )}
     </div>

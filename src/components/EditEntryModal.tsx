@@ -140,8 +140,8 @@ export function EditEntryModal({
 
           <div className="form-field">
             <label className="form-label">Duration</label>
-            <div style={{ display: "flex", gap: "12px" }}>
-              <div style={{ flex: 1 }}>
+            <div className="edit-entry__duration-row">
+              <div className="edit-entry__duration-field">
                 <input
                   className="form-input"
                   type="text"
@@ -151,11 +151,9 @@ export function EditEntryModal({
                   onKeyDown={handleKeyDown}
                   placeholder="0"
                 />
-                <div style={{ fontSize: "var(--text-small)", color: "var(--text-tertiary)", marginTop: "4px" }}>
-                  hours
-                </div>
+                <div className="edit-entry__duration-hint">hours</div>
               </div>
-              <div style={{ flex: 1 }}>
+              <div className="edit-entry__duration-field">
                 <input
                   className="form-input"
                   type="text"
@@ -165,21 +163,13 @@ export function EditEntryModal({
                   onKeyDown={handleKeyDown}
                   placeholder="0"
                 />
-                <div style={{ fontSize: "var(--text-small)", color: "var(--text-tertiary)", marginTop: "4px" }}>
-                  minutes
-                </div>
+                <div className="edit-entry__duration-hint">minutes</div>
               </div>
             </div>
           </div>
 
-          <div style={{
-            padding: "var(--space-4)",
-            background: "var(--surface-subtle)",
-            borderRadius: "var(--radius)",
-            fontSize: "var(--text-small)",
-            color: "var(--text-secondary)"
-          }}>
-            <div style={{ marginBottom: "var(--space-2)" }}>
+          <div className="edit-entry__meta">
+            <div>
               <strong>Start:</strong> {new Date(entry.startTime * 1000).toLocaleString()}
             </div>
             <div>

@@ -33,8 +33,14 @@ pub fn generate_invoice(
     output_path: &str,
 ) -> Result<(), String> {
     // Create PDF document
+    let title_text = if business_info.name.trim().is_empty() {
+        "Invoice".to_string()
+    } else {
+        business_info.name.trim().to_string()
+    };
+
     let (doc, page1, layer1) = PdfDocument::new(
-        "Time Tracking Invoice",
+        &title_text,
         Mm(210.0), // A4 width
         Mm(297.0), // A4 height
         "Layer 1",
@@ -50,15 +56,17 @@ pub fn generate_invoice(
 
     let mut y_position: f32 = 260.0; // Start from top
 
-    // Title
-    current_layer.use_text(
-        "TIME TRACKING INVOICE",
-        24.0,
-        Mm(20.0),
-        Mm(y_position),
-        &font_bold,
-    );
-    y_position -= 10.0_f32;
+    // Title (business name or generic Invoice)
+    if !title_text.is_empty() {
+        current_layer.use_text(
+            &title_text,
+            24.0,
+            Mm(20.0),
+            Mm(y_position),
+            &font_bold,
+        );
+        y_position -= 10.0_f32;
+    }
 
     // Invoice metadata
     let now = Local::now();

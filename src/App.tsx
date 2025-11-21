@@ -33,12 +33,14 @@ function App() {
     updateEntryDetails,
     historyEntries,
     loadHistory,
+    entriesVersion,
   } = useTimeTracker();
 
   const [view, setView] = useState<"today" | "history" | "invoices">("today");
   const [editTarget, setEditTarget] = useState<TimeEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [invoiceRefreshToken, setInvoiceRefreshToken] = useState(0);
 
   const confirmDelete = async () => {
     if (!deleteTarget) {
@@ -94,6 +96,10 @@ function App() {
 
   const timerDisplay = formatDuration(isRunning ? elapsedSeconds : 0);
   const isStartDisabled = isRunning || projectName.trim().length === 0;
+
+  const handleInvoiceCreated = () => {
+    setInvoiceRefreshToken((token) => token + 1);
+  };
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -298,12 +304,15 @@ function App() {
               beginEditing={openEditModal}
               cancelEditing={() => {}}
               saveEditing={() => {}}
+              isActive={view === "history"}
+              refreshSignal={entriesVersion}
+              onInvoiceCreated={handleInvoiceCreated}
             />
           </div>
 
           {/* Invoices View */}
           <div className={`view ${view === "invoices" ? "view--active" : ""}`}>
-            <InvoicesView />
+            <InvoicesView refreshSignal={invoiceRefreshToken} />
           </div>
         </div>
       </main>

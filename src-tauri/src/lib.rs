@@ -742,24 +742,26 @@ async fn get_invoice_pdf_path(
 async fn delete_invoice(app_handle: tauri::AppHandle, id: i64) -> Result<(), String> {
     let db_path = resolve_db_path(&app_handle)?;
 
-    // Get file path before deleting from database
-    let file_path = get_invoice_pdf_path(app_handle.clone(), id).await?;
-
-    // Delete from database
-    tauri::async_runtime::spawn_blocking(move || {
+    // Fetch file path and delete row in a single connection to avoid locking issues.
+    let file_path = tauri::async_runtime::spawn_blocking(move || {
         let conn = open_connection(db_path)?;
+        let file_path: String = conn
+            .query_row("SELECT file_path FROM invoices WHERE id = ?1", params![id], |row| row.get(0))
+            .map_err(|e| format!("Invoice not found: {}", e))?;
+
         conn.execute("DELETE FROM invoices WHERE id = ?1", params![id])
             .map_err(|err| err.to_string())?;
-        Ok::<(), String>(())
+
+        Ok::<String, String>(file_path)
     })
     .await
     .map_err(|err| err.to_string())??;
 
     // Delete file
     if let Err(e) = fs::remove_file(&file_path) {
-        // Log error but don't fail if file doesn't exist
+        // If we can't delete the PDF (e.g. locked by a viewer), log it but still treat as success
         if e.kind() != io::ErrorKind::NotFound {
-            return Err(format!("Failed to delete invoice file: {}", e));
+            eprintln!("Failed to delete invoice file {}: {}", file_path, e);
         }
     }
 
@@ -980,6 +982,8 @@ async fn persist_time_entry(
 
 fn open_connection(db_path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|err| err.to_string())?;
     conn.execute(CREATE_TIME_ENTRIES_TABLE_SQL, [])
         .map_err(|err| err.to_string())?;
     conn.execute(CREATE_INVOICES_TABLE_SQL, [])

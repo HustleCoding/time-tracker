@@ -71,6 +71,7 @@ export function useTimeTracker() {
   const [isRunning, setIsRunning] = useState(false);
   const [startTimestamp, setStartTimestamp] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [entriesVersion, setEntriesVersion] = useState(0);
   const [todayTotalSeconds, setTodayTotalSeconds] = useState(0);
   const [todayTotalAmount, setTodayTotalAmount] = useState(0);
   const [entries, setEntries] = useState<TimeEntry[]>([]);
@@ -98,6 +99,7 @@ export function useTimeTracker() {
     try {
       await Promise.all([loadEntries(), loadTodayTotals()]);
       setError(null);
+      setEntriesVersion((version) => version + 1);
     } catch (err) {
       setError(parseError(err));
     } finally {
@@ -374,5 +376,6 @@ export function useTimeTracker() {
     updateEntryDetails,
     historyEntries,
     loadHistory,
+    entriesVersion,
   };
 }

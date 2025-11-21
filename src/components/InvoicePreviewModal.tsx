@@ -14,16 +14,22 @@ export function InvoicePreviewModal({
   onClose,
   onDownload
 }: InvoicePreviewModalProps) {
-  const [filePath, setFilePath] = useState<string>(propFilePath || '');
+  const [filePath, setFilePath] = useState<string>(propFilePath || "");
   const [loading, setLoading] = useState(!propFilePath);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [downloadMessage, setDownloadMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (invoiceId && !propFilePath) {
       loadInvoicePath();
     }
+  }, [invoiceId, propFilePath]);
+
+  useEffect(() => {
+    setDownloadMessage(null);
+    setError(null);
   }, [invoiceId, propFilePath]);
 
   useEffect(() => {
@@ -37,10 +43,10 @@ export function InvoicePreviewModal({
     try {
       setLoading(true);
       setError(null);
-      const path = await invoke<string>('get_invoice_pdf_path', { id: invoiceId });
+      const path = await invoke<string>("get_invoice_pdf_path", { id: invoiceId });
       setFilePath(path);
     } catch (err) {
-      setError(err as string);
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -65,60 +71,76 @@ export function InvoicePreviewModal({
 
     try {
       setDownloading(true);
-      const downloadPath = await invoke<string>('export_invoice_to_downloads', { id: invoiceId });
-      alert(`Invoice downloaded to: ${downloadPath}`);
+      setDownloadMessage(null);
+      setError(null);
+      const downloadPath = await invoke<string>("export_invoice_to_downloads", { id: invoiceId });
+      setDownloadMessage(`Invoice downloaded to: ${downloadPath}`);
       if (onDownload) {
         onDownload(invoiceId);
       }
     } catch (err) {
-      alert(`Failed to download invoice: ${err}`);
+      setError(`Failed to download invoice: ${err}`);
     } finally {
       setDownloading(false);
     }
   };
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content invoice-preview-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>Invoice Preview</h2>
-          <button className="close-button" onClick={onClose}>×</button>
+    <div className="dialog-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="dialog invoice-preview" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog__header">
+          <h3 className="dialog__title">Invoice Preview</h3>
+          <button className="dialog__close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
         </div>
 
-        <div className="invoice-preview-body">
-          {loading && <div className="loading-state">Loading invoice...</div>}
+        <div className="dialog__body invoice-preview__body">
+          {loading && <div className="invoice-preview__status">Loading invoice...</div>}
 
           {error && (
-            <div className="error-state">
+            <div className="message message--error invoice-preview__status">
               <p>{error}</p>
-              <button onClick={loadInvoicePath}>Retry</button>
+              <button className="btn btn-secondary" onClick={loadInvoicePath}>
+                Retry
+              </button>
             </div>
           )}
 
           {!loading && !error && filePath && (
-            <div className="pdf-opened-message">
-              <div className="pdf-icon">📄</div>
-              <h3>Invoice Opened in PDF Viewer</h3>
-              <p>The invoice has been opened in your system's default PDF viewer.</p>
-              <p className="pdf-path">Location: {filePath}</p>
-              <button className="button-secondary" onClick={openPdfInViewer}>
-                Open Again
-              </button>
+            <div className="invoice-preview__success">
+              <div className="invoice-preview__icon" aria-hidden="true">📄</div>
+              <div className="invoice-preview__text">
+                <h4>Invoice opened in your PDF viewer</h4>
+                <p>The invoice has been opened in your system&apos;s default PDF viewer.</p>
+                <p className="invoice-preview__path">Location: {filePath}</p>
+              </div>
+              <div className="invoice-preview__actions">
+                <button className="btn btn-secondary" onClick={openPdfInViewer}>
+                  Open Again
+                </button>
+              </div>
+            </div>
+          )}
+
+          {downloadMessage && (
+            <div className="invoice-preview__status">
+              <div className="invoice-preview__path">{downloadMessage}</div>
             </div>
           )}
         </div>
 
-        <div className="modal-footer">
-          <button className="button-secondary" onClick={onClose}>
+        <div className="dialog__footer">
+          <button className="btn btn-secondary" onClick={onClose}>
             Close
           </button>
           {invoiceId && (
             <button
-              className="button-primary"
+              className="btn btn-primary"
               onClick={handleDownload}
               disabled={downloading}
             >
-              {downloading ? 'Downloading...' : 'Download'}
+              {downloading ? "Downloading..." : "Download"}
             </button>
           )}
         </div>

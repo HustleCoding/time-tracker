@@ -4,22 +4,14 @@ import { formatCurrency } from '../lib/currency';
 type InvoiceCardProps = {
   invoice: Invoice;
   onPreview: (invoice: Invoice) => void;
-  onDelete: (invoiceId: number) => void;
 };
 
-export function InvoiceCard({ invoice, onPreview, onDelete }: InvoiceCardProps) {
+export function InvoiceCard({ invoice, onPreview }: InvoiceCardProps) {
   const formattedDate = new Date(invoice.createdAt * 1000).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'long',
     day: 'numeric',
   });
-
-  const handleDelete = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirm('Are you sure you want to delete this invoice?')) {
-      onDelete(invoice.id);
-    }
-  };
 
   return (
     <div className="invoice-card">
@@ -38,13 +30,6 @@ export function InvoiceCard({ invoice, onPreview, onDelete }: InvoiceCardProps) 
           title="View invoice PDF"
         >
           View PDF
-        </button>
-        <button
-          className="btn-ghost"
-          onClick={handleDelete}
-          title="Delete invoice"
-        >
-          Delete
         </button>
       </div>
     </div>
