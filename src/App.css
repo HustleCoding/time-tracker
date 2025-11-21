@@ -1174,3 +1174,111 @@ ul, ol {
     width: 95%;
   }
 }
+
+/* Date Picker */
+.date-picker {
+  position: relative;
+}
+
+.date-picker__input {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--input-height);
+  padding: 0 var(--space-3);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: var(--surface);
+}
+
+.date-picker__input:hover {
+  border-color: var(--gray-600);
+}
+
+.date-picker__input-field {
+  border: none;
+  background: transparent;
+  width: 100%;
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  cursor: inherit;
+}
+
+.date-picker__input-field:focus {
+  outline: none;
+}
+
+.date-picker__icon {
+  font-size: 18px;
+}
+
+.date-picker__panel {
+  position: absolute;
+  z-index: 150;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  background: var(--surface);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-subtle);
+  padding: var(--space-3);
+  min-width: 260px;
+}
+
+.date-picker__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+.date-picker__nav {
+  border: var(--border-width) solid var(--border);
+  background: var(--surface-subtle);
+  border-radius: var(--radius);
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+}
+
+.date-picker__month {
+  font-weight: 600;
+}
+
+.date-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: var(--space-1);
+}
+
+.date-picker__day-label {
+  text-align: center;
+  font-size: var(--text-small);
+  color: var(--text-tertiary);
+}
+
+.date-picker__day {
+  height: 32px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+  cursor: pointer;
+  font-size: var(--text-small);
+}
+
+.date-picker__day--empty {
+  visibility: hidden;
+}
+
+.date-picker__day--selected {
+  border-color: var(--black);
+  background: var(--surface);
+  color: var(--black);
+  font-weight: 600;
+}
+
+.date-picker__day:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--surface);
+}

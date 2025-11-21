@@ -1,10 +1,12 @@
-import { useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Invoice } from "../types/time-entry";
 
 type InvoiceDialogProps = {
   isOpen: boolean;
   onClose: () => void;
+  startTime: number;
+  endTime: number;
   onInvoiceOpened?: (payload: { invoice: Invoice; path: string }) => void;
 };
 
@@ -31,6 +33,134 @@ const emptyBusinessInfo: BusinessInfo = {
   clientPhone: "",
 };
 
+const toDateInputValue = (timestampSeconds: number) => {
+  const date = new Date(timestampSeconds * 1000);
+  return date.toISOString().slice(0, 10);
+};
+
+const parseDate = (value: string): Date | null => {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+type DatePickerProps = {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+function DatePicker({ id, label, value, onChange }: DatePickerProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const parsed = parseDate(value) ?? new Date();
+  const [viewDate, setViewDate] = useState(parsed);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  useEffect(() => {
+    const next = parseDate(value);
+    if (next) {
+      setViewDate(next);
+    }
+  }, [value]);
+
+  const daysInMonth = new Date(viewDate.getUTCFullYear(), viewDate.getUTCMonth() + 1, 0).getUTCDate();
+  const startDay = new Date(viewDate.getUTCFullYear(), viewDate.getUTCMonth(), 1).getUTCDay();
+  const dayLabels = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const offset = startDay;
+  const cells = Array.from({ length: offset + daysInMonth }, (_, index) => {
+    if (index < offset) return null;
+    return index - offset + 1;
+  });
+
+  const handleSelect = (day: number) => {
+    const selected = new Date(Date.UTC(viewDate.getUTCFullYear(), viewDate.getUTCMonth(), day));
+    const iso = selected.toISOString().slice(0, 10);
+    onChange(iso);
+    setIsOpen(false);
+  };
+
+  const changeMonth = (delta: number) => {
+    const next = new Date(Date.UTC(viewDate.getUTCFullYear(), viewDate.getUTCMonth() + delta, 1));
+    setViewDate(next);
+  };
+
+  const formattedValue = value ? value : "";
+
+  return (
+    <div className="form-field date-picker" ref={containerRef}>
+      <label className="form-label" htmlFor={id}>
+        {label}
+      </label>
+      <div className="date-picker__input" onClick={() => setIsOpen((open) => !open)}>
+        <input
+          id={id}
+          type="text"
+          readOnly
+          className="date-picker__input-field"
+          value={formattedValue}
+          placeholder="YYYY-MM-DD"
+        />
+        <span className="date-picker__icon" aria-hidden="true">📅</span>
+      </div>
+      {isOpen && (
+        <div className="date-picker__panel" role="application" aria-label={`${label} calendar`}>
+          <div className="date-picker__header">
+            <button
+              type="button"
+              className="date-picker__nav"
+              onClick={() => changeMonth(-1)}
+              aria-label="Previous month"
+            >
+              ←
+            </button>
+            <div className="date-picker__month">
+              {viewDate.toLocaleString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}
+            </div>
+            <button
+              type="button"
+              className="date-picker__nav"
+              onClick={() => changeMonth(1)}
+              aria-label="Next month"
+            >
+              →
+            </button>
+          </div>
+          <div className="date-picker__grid">
+            {dayLabels.map((day) => (
+              <div key={day} className="date-picker__day-label">{day}</div>
+            ))}
+            {cells.map((day, idx) => (
+              <button
+                key={`${day}-${idx}`}
+                type="button"
+                className={`date-picker__day ${day === null ? "date-picker__day--empty" : ""} ${value && parseDate(value)?.getUTCDate() === day && parseDate(value)?.getUTCMonth() === viewDate.getUTCMonth() ? "date-picker__day--selected" : ""}`}
+                onClick={() => day && handleSelect(day)}
+                disabled={day === null}
+                aria-label={day ? `${viewDate.toLocaleString(undefined, { month: "long", timeZone: "UTC" })} ${day}, ${viewDate.getUTCFullYear()}` : undefined}
+              >
+                {day ?? ""}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const loadStoredBusinessInfo = (): BusinessInfo => {
   if (typeof window === "undefined") {
     return emptyBusinessInfo;
@@ -46,18 +176,43 @@ const loadStoredBusinessInfo = (): BusinessInfo => {
   return emptyBusinessInfo;
 };
 
-export function InvoiceDialog({ isOpen, onClose, onInvoiceOpened }: InvoiceDialogProps) {
+export function InvoiceDialog({
+  isOpen,
+  onClose,
+  startTime,
+  endTime,
+  onInvoiceOpened,
+}: InvoiceDialogProps) {
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(loadStoredBusinessInfo);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [startDate, setStartDate] = useState<string>(toDateInputValue(startTime));
+  const [endDate, setEndDate] = useState<string>(toDateInputValue(endTime));
 
   useEffect(() => {
     if (isOpen) {
       setError(null);
+      setStartDate(toDateInputValue(startTime));
+      setEndDate(toDateInputValue(endTime));
     }
-  }, [isOpen]);
+  }, [isOpen, startTime, endTime]);
 
   const handleGenerate = async () => {
+    if (!startDate || !endDate) {
+      setError("Please select a start and end date");
+      return;
+    }
+
+    const rangeStart = new Date(startDate);
+    const rangeEnd = new Date(endDate);
+    rangeStart.setHours(0, 0, 0, 0);
+    rangeEnd.setHours(23, 59, 59, 999);
+
+    if (rangeStart.getTime() > rangeEnd.getTime()) {
+      setError("Start date cannot be after end date");
+      return;
+    }
+
     if (!businessInfo.name.trim()) {
       setError("Please enter your business name");
       return;
@@ -88,6 +243,8 @@ export function InvoiceDialog({ isOpen, onClose, onInvoiceOpened }: InvoiceDialo
           clientEmail: businessInfo.clientEmail || null,
           clientPhone: businessInfo.clientPhone || null,
         },
+        startTime: Math.floor(rangeStart.getTime() / 1000),
+        endTime: Math.floor(rangeEnd.getTime() / 1000),
       });
 
       const downloadPath = await invoke<string>("export_invoice_to_downloads", {
@@ -144,6 +301,21 @@ export function InvoiceDialog({ isOpen, onClose, onInvoiceOpened }: InvoiceDialo
             Keep your own details on the left and the recipient on the right. Both
             are saved locally for the next invoice.
           </p>
+
+          <div className="form-grid" style={{ marginBottom: "var(--space-4)" }}>
+            <DatePicker
+              id="invoice-start-date"
+              label="Period Start"
+              value={startDate}
+              onChange={setStartDate}
+            />
+            <DatePicker
+              id="invoice-end-date"
+              label="Period End"
+              value={endDate}
+              onChange={setEndDate}
+            />
+          </div>
 
           <div className="invoice-dialog__grid">
             <div className="invoice-group">

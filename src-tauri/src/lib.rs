@@ -35,6 +35,15 @@ const CREATE_TIME_ENTRIES_TABLE_SQL: &str = r#"
     )
 "#;
 
+const CREATE_ACTIVE_TIMER_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS active_timer (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        project_name TEXT NOT NULL,
+        start_time INTEGER NOT NULL,
+        hourly_rate REAL NOT NULL DEFAULT 0
+    )
+"#;
+
 const CREATE_INVOICES_TABLE_SQL: &str = r#"
     CREATE TABLE IF NOT EXISTS invoices (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -166,6 +175,16 @@ impl TimerState {
     fn take_active(&self) -> Option<ActiveTimer> {
         let mut guard = self.inner.lock().expect("timer state poisoned");
         guard.active.take()
+    }
+
+    fn clear(&self) {
+        let mut guard = self.inner.lock().expect("timer state poisoned");
+        guard.active = None;
+    }
+
+    fn restore(&self, timer: ActiveTimer) {
+        let mut guard = self.inner.lock().expect("timer state poisoned");
+        guard.active = Some(timer);
     }
 }
 
@@ -551,6 +570,8 @@ async fn generate_invoice_pdf(
 async fn save_invoice(
     app_handle: tauri::AppHandle,
     business_info: BusinessInfo,
+    start_time: Option<i64>,
+    end_time: Option<i64>,
 ) -> Result<Invoice, String> {
     let db_path = resolve_db_path(&app_handle)?;
     let invoices_dir = resolve_invoices_dir(&app_handle)?;
@@ -558,28 +579,51 @@ async fn save_invoice(
     // Get all entries
     let entries = tauri::async_runtime::spawn_blocking({
         let db_path = db_path.clone();
+        let start = start_time;
+        let end = end_time;
         move || {
             let conn = open_connection(db_path)?;
 
-            let mut stmt = conn
-                .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time ASC")
-                .map_err(|e| e.to_string())?;
-
-            let entries = stmt
-                .query_map([], |row| {
-                    Ok(TimeEntry {
-                        id: row.get(0)?,
-                        project_name: row.get(1)?,
-                        start_time: row.get(2)?,
-                        end_time: row.get(3)?,
-                        duration: row.get(4)?,
-                        hourly_rate: row.get(5)?,
-                        amount: row.get(6)?,
-                    })
+            let map_entry = |row: &rusqlite::Row| -> rusqlite::Result<TimeEntry> {
+                Ok(TimeEntry {
+                    id: row.get(0)?,
+                    project_name: row.get(1)?,
+                    start_time: row.get(2)?,
+                    end_time: row.get(3)?,
+                    duration: row.get(4)?,
+                    hourly_rate: row.get(5)?,
+                    amount: row.get(6)?,
                 })
-                .map_err(|e| e.to_string())?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| e.to_string())?;
+            };
+
+            let entries = if let (Some(start), Some(end)) = (start, end) {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
+                         FROM time_entries
+                         WHERE start_time >= ?1 AND start_time < ?2
+                         ORDER BY start_time ASC",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(params![start, end], |row| map_entry(row))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+            } else {
+                let mut stmt = conn
+                    .prepare(
+                        "SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount
+                         FROM time_entries
+                         ORDER BY start_time ASC",
+                    )
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map([], |row| map_entry(row))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?
+            };
 
             Ok::<Vec<TimeEntry>, String>(entries)
         }
@@ -588,7 +632,7 @@ async fn save_invoice(
     .map_err(|e| e.to_string())??;
 
     if entries.is_empty() {
-        return Err("No time entries to include in the invoice".into());
+        return Err("No time entries in the selected period to include in the invoice".into());
     }
 
     // Calculate totals
@@ -872,6 +916,7 @@ pub fn run() {
             let assets = TrayAssets::load()?;
             app.manage(assets);
             setup_tray(app)?;
+            restore_active_timer(&app.handle()).map_err(to_tauri_error)?;
             refresh_tray(&app.handle())?;
             Ok(())
         })
@@ -888,7 +933,17 @@ fn start_timer_internal(
     let sanitized_name = sanitize_project_name(project_name);
     let sanitized_rate = sanitize_hourly_rate(hourly_rate);
     let start_time = current_unix_timestamp();
+    let active_timer = ActiveTimer {
+        project_name: sanitized_name.clone(),
+        start_time,
+        hourly_rate: sanitized_rate,
+    };
     let status = timer_state.start(sanitized_name, start_time, sanitized_rate)?;
+    let db_path = resolve_db_path(app_handle)?;
+    if let Err(err) = persist_active_timer(db_path, &active_timer) {
+        timer_state.clear();
+        return Err(err);
+    }
     refresh_tray(app_handle).map_err(|err| err.to_string())?;
     emit_timer_status(app_handle, &status);
     Ok(status)
@@ -911,6 +966,7 @@ async fn stop_timer_internal(app_handle: &AppHandle) -> Result<Option<TimeEntry>
         active.hourly_rate,
     )
     .await?;
+    let _ = clear_active_timer(resolve_db_path(app_handle)?);
 
     let status = timer_state.status();
     refresh_tray(app_handle).map_err(|err| err.to_string())?;
@@ -986,6 +1042,8 @@ fn open_connection(db_path: PathBuf) -> Result<Connection, String> {
         .map_err(|err| err.to_string())?;
     conn.execute(CREATE_TIME_ENTRIES_TABLE_SQL, [])
         .map_err(|err| err.to_string())?;
+    conn.execute(CREATE_ACTIVE_TIMER_TABLE_SQL, [])
+        .map_err(|err| err.to_string())?;
     conn.execute(CREATE_INVOICES_TABLE_SQL, [])
         .map_err(|err| err.to_string())?;
     ensure_rate_columns(&conn)?;
@@ -1026,6 +1084,12 @@ fn database_migrations() -> Vec<Migration> {
             version: 2,
             description: "create_invoices",
             sql: CREATE_INVOICES_TABLE_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 3,
+            description: "create_active_timer",
+            sql: CREATE_ACTIVE_TIMER_TABLE_SQL,
             kind: MigrationKind::Up,
         },
     ]
@@ -1274,6 +1338,56 @@ fn sanitize_hourly_rate(rate: f64) -> f64 {
 
 fn current_unix_timestamp() -> i64 {
     Utc::now().timestamp()
+}
+
+fn persist_active_timer(db_path: PathBuf, timer: &ActiveTimer) -> Result<(), String> {
+    let conn = open_connection(db_path)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO active_timer (id, project_name, start_time, hourly_rate)
+         VALUES (1, ?1, ?2, ?3)",
+        params![timer.project_name, timer.start_time, timer.hourly_rate],
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn clear_active_timer(db_path: PathBuf) -> Result<(), String> {
+    let conn = open_connection(db_path)?;
+    conn.execute("DELETE FROM active_timer WHERE id = 1", [])
+        .map_err(|err| err.to_string())?;
+    Ok(())
+}
+
+fn load_active_timer(db_path: PathBuf) -> Result<Option<ActiveTimer>, String> {
+    let conn = open_connection(db_path)?;
+    let result = conn.query_row(
+        "SELECT project_name, start_time, hourly_rate FROM active_timer WHERE id = 1",
+        [],
+        |row| {
+            Ok(ActiveTimer {
+                project_name: row.get(0)?,
+                start_time: row.get(1)?,
+                hourly_rate: row.get(2)?,
+            })
+        },
+    );
+    match result {
+        Ok(timer) => Ok(Some(timer)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn restore_active_timer(app: &AppHandle) -> Result<(), String> {
+    let db_path = resolve_db_path(app)?;
+    if let Some(timer) = load_active_timer(db_path)? {
+        let timer_state = app.state::<TimerState>();
+        timer_state.restore(timer);
+        let status = timer_state.status();
+        let _ = refresh_tray(app);
+        emit_timer_status(app, &status);
+    }
+    Ok(())
 }
 
 fn is_main_window_visible(app: &AppHandle) -> bool {

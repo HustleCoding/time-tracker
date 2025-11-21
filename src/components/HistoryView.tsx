@@ -26,6 +26,18 @@ type HistoryViewProps = {
   onInvoiceCreated?: (invoice: Invoice) => void;
 };
 
+const getDayBounds = (date: Date) => {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+
+  return {
+    start: Math.floor(start.getTime() / 1000),
+    end: Math.floor(end.getTime() / 1000),
+  };
+};
+
 export function HistoryView({
   entries,
   loading,
@@ -49,22 +61,15 @@ export function HistoryView({
   const [invoiceToast, setInvoiceToast] = useState<{ path: string } | null>(null);
   const totalDurationSeconds = entries.reduce((acc, entry) => acc + entry.duration, 0);
   const totalAmount = entries.reduce((acc, entry) => acc + entry.amount, 0);
+  const { start: startTime, end: endTime } = getDayBounds(currentDate);
 
   useEffect(() => {
     if (!isActive) {
       return;
     }
 
-    const start = new Date(currentDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(currentDate);
-    end.setHours(23, 59, 59, 999);
-
-    onLoadHistory(
-      Math.floor(start.getTime() / 1000),
-      Math.floor(end.getTime() / 1000)
-    );
-  }, [currentDate, onLoadHistory, refreshSignal, isActive]);
+    onLoadHistory(startTime, endTime);
+  }, [currentDate, onLoadHistory, refreshSignal, isActive, startTime, endTime]);
 
   const handlePrevDay = () => {
     const newDate = new Date(currentDate);
@@ -172,6 +177,8 @@ export function HistoryView({
       <InvoiceDialog
         isOpen={showInvoiceDialog}
         onClose={() => setShowInvoiceDialog(false)}
+        startTime={startTime}
+        endTime={endTime}
         onInvoiceOpened={handleInvoiceOpened}
       />
 
