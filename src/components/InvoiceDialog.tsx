@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { InvoicePreviewModal } from "./InvoicePreviewModal";
+import { Invoice } from "../types/time-entry";
 
 type InvoiceDialogProps = {
   isOpen: boolean;
@@ -48,12 +50,12 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(loadStoredBusinessInfo);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [generatedInvoice, setGeneratedInvoice] = useState<Invoice | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setError(null);
-      setSuccess(null);
+      setGeneratedInvoice(null);
     }
   }, [isOpen]);
 
@@ -70,7 +72,6 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
 
     setIsGenerating(true);
     setError(null);
-    setSuccess(null);
 
     try {
       // Save business info to localStorage
@@ -79,8 +80,8 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
         JSON.stringify(businessInfo)
       );
 
-      // Generate PDF
-      const pdfPath = await invoke<string>("generate_invoice_pdf", {
+      // Save invoice and generate PDF
+      const invoice = await invoke<Invoice>("save_invoice", {
         businessInfo: {
           name: businessInfo.name,
           address: businessInfo.address || null,
@@ -93,7 +94,7 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
         },
       });
 
-      setSuccess(`Invoice saved to: ${pdfPath}`);
+      setGeneratedInvoice(invoice);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -101,8 +102,23 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
     }
   };
 
+  const handleClosePreview = () => {
+    setGeneratedInvoice(null);
+    onClose();
+  };
+
   if (!isOpen) {
     return null;
+  }
+
+  if (generatedInvoice) {
+    return (
+      <InvoicePreviewModal
+        invoiceId={generatedInvoice.id}
+        onClose={handleClosePreview}
+        onDownload={handleClosePreview}
+      />
+    );
   }
 
   return (
@@ -125,17 +141,7 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
           </div>
         )}
 
-        {success && (
-          <div className="invoice-dialog__success">
-            <p>{success}</p>
-            <button className="button-primary" onClick={onClose}>
-              Close
-            </button>
-          </div>
-        )}
-
-        {!success && (
-          <div className="invoice-dialog__body">
+        <div className="invoice-dialog__body">
             <p className="invoice-dialog__description">
               Keep your own details on the left and the recipient on the right. Both
               are saved locally for the next invoice.
@@ -290,11 +296,10 @@ export function InvoiceDialog({ isOpen, onClose }: InvoiceDialogProps) {
                 onClick={handleGenerate}
                 disabled={isGenerating}
               >
-                {isGenerating ? "Generating..." : "Generate Invoice PDF"}
+                {isGenerating ? "Generating..." : "Generate Preview"}
               </button>
             </div>
           </div>
-        )}
       </div>
     </div>
   );

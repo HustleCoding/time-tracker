@@ -35,6 +35,19 @@ const CREATE_TIME_ENTRIES_TABLE_SQL: &str = r#"
     )
 "#;
 
+const CREATE_INVOICES_TABLE_SQL: &str = r#"
+    CREATE TABLE IF NOT EXISTS invoices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL,
+        business_info TEXT NOT NULL,
+        bill_to_info TEXT NOT NULL,
+        total_hours REAL NOT NULL,
+        total_amount REAL NOT NULL,
+        file_path TEXT NOT NULL,
+        entry_count INTEGER NOT NULL
+    )
+"#;
+
 #[derive(Debug, Serialize)]
 pub struct TimeEntry {
     pub id: i64,
@@ -57,6 +70,19 @@ pub struct BusinessInfo {
     pub client_address: Option<String>,
     pub client_email: Option<String>,
     pub client_phone: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Invoice {
+    pub id: i64,
+    pub created_at: i64,
+    pub business_info: String,
+    pub bill_to_info: String,
+    pub total_hours: f64,
+    pub total_amount: f64,
+    pub file_path: String,
+    pub entry_count: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -166,6 +192,7 @@ struct TodayTotals {
 #[tauri::command]
 async fn initialize_database(app_handle: tauri::AppHandle) -> Result<(), String> {
     let db_path = resolve_db_path(&app_handle)?;
+    let _ = resolve_invoices_dir(&app_handle)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _ = open_connection(db_path)?;
         Ok::<(), String>(())
@@ -520,6 +547,284 @@ async fn generate_invoice_pdf(
     Ok(output_path_str.to_string())
 }
 
+#[tauri::command]
+async fn save_invoice(
+    app_handle: tauri::AppHandle,
+    business_info: BusinessInfo,
+) -> Result<Invoice, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+    let invoices_dir = resolve_invoices_dir(&app_handle)?;
+
+    // Get all entries
+    let entries = tauri::async_runtime::spawn_blocking({
+        let db_path = db_path.clone();
+        move || {
+            let conn = open_connection(db_path)?;
+
+            let mut stmt = conn
+                .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time ASC")
+                .map_err(|e| e.to_string())?;
+
+            let entries = stmt
+                .query_map([], |row| {
+                    Ok(TimeEntry {
+                        id: row.get(0)?,
+                        project_name: row.get(1)?,
+                        start_time: row.get(2)?,
+                        end_time: row.get(3)?,
+                        duration: row.get(4)?,
+                        hourly_rate: row.get(5)?,
+                        amount: row.get(6)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+
+            Ok::<Vec<TimeEntry>, String>(entries)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    if entries.is_empty() {
+        return Err("No time entries to include in the invoice".into());
+    }
+
+    // Calculate totals
+    let mut total_hours = 0.0;
+    let mut total_amount = 0.0;
+    for entry in &entries {
+        total_hours += entry.duration as f64 / 3600.0;
+        total_amount += entry.amount;
+    }
+    let entry_count = entries.len() as i64;
+
+    // Generate filename
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+    let filename = format!("invoice_{}.pdf", timestamp);
+    let output_path = invoices_dir.join(&filename);
+    let output_path_str = output_path
+        .to_str()
+        .ok_or("Invalid file path")?
+        .to_string();
+
+    // Convert entries to pdf_generator format
+    let pdf_entries: Vec<pdf_generator::TimeEntry> = entries
+        .into_iter()
+        .map(|e| pdf_generator::TimeEntry {
+            id: e.id,
+            project_name: e.project_name,
+            start_time: e.start_time,
+            end_time: e.end_time,
+            duration: e.duration,
+            hourly_rate: e.hourly_rate,
+            amount: e.amount,
+        })
+        .collect();
+
+    let pdf_business_info = pdf_generator::BusinessInfo {
+        name: business_info.name.clone(),
+        address: business_info.address.clone(),
+        email: business_info.email.clone(),
+        phone: business_info.phone.clone(),
+        client_name: business_info.client_name.clone(),
+        client_address: business_info.client_address.clone(),
+        client_email: business_info.client_email.clone(),
+        client_phone: business_info.client_phone.clone(),
+    };
+
+    // Generate PDF
+    pdf_generator::generate_invoice(pdf_entries, pdf_business_info, &output_path_str)?;
+
+    // Serialize business info to JSON
+    let business_info_json = serde_json::to_string(&business_info)
+        .map_err(|e| format!("Failed to serialize business info: {}", e))?;
+    let bill_to_json = serde_json::to_string(&serde_json::json!({
+        "name": business_info.client_name,
+        "address": business_info.client_address,
+        "email": business_info.client_email,
+        "phone": business_info.client_phone,
+    }))
+    .map_err(|e| format!("Failed to serialize bill to info: {}", e))?;
+
+    let created_at = current_unix_timestamp();
+
+    // Save to database
+    let invoice = tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+
+        conn.execute(
+            "INSERT INTO invoices (created_at, business_info, bill_to_info, total_hours, total_amount, file_path, entry_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![created_at, business_info_json, bill_to_json, total_hours, total_amount, output_path_str, entry_count],
+        )
+        .map_err(|err| err.to_string())?;
+
+        let id = conn.last_insert_rowid();
+
+        Ok::<Invoice, String>(Invoice {
+            id,
+            created_at,
+            business_info: business_info_json,
+            bill_to_info: bill_to_json,
+            total_hours,
+            total_amount,
+            file_path: output_path_str,
+            entry_count,
+        })
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+
+    Ok(invoice)
+}
+
+#[tauri::command]
+async fn get_all_invoices(app_handle: tauri::AppHandle) -> Result<Vec<Invoice>, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+
+        let mut stmt = conn
+            .prepare("SELECT id, created_at, business_info, bill_to_info, total_hours, total_amount, file_path, entry_count FROM invoices ORDER BY created_at DESC")
+            .map_err(|e| e.to_string())?;
+
+        let invoices = stmt
+            .query_map([], |row| {
+                Ok(Invoice {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    business_info: row.get(2)?,
+                    bill_to_info: row.get(3)?,
+                    total_hours: row.get(4)?,
+                    total_amount: row.get(5)?,
+                    file_path: row.get(6)?,
+                    entry_count: row.get(7)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        Ok(invoices)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_invoice_pdf_path(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> Result<String, String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+
+        let file_path: String = conn
+            .query_row(
+                "SELECT file_path FROM invoices WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .map_err(|e| format!("Invoice not found: {}", e))?;
+
+        Ok(file_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn delete_invoice(app_handle: tauri::AppHandle, id: i64) -> Result<(), String> {
+    let db_path = resolve_db_path(&app_handle)?;
+
+    // Get file path before deleting from database
+    let file_path = get_invoice_pdf_path(app_handle.clone(), id).await?;
+
+    // Delete from database
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_connection(db_path)?;
+        conn.execute("DELETE FROM invoices WHERE id = ?1", params![id])
+            .map_err(|err| err.to_string())?;
+        Ok::<(), String>(())
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+
+    // Delete file
+    if let Err(e) = fs::remove_file(&file_path) {
+        // Log error but don't fail if file doesn't exist
+        if e.kind() != io::ErrorKind::NotFound {
+            return Err(format!("Failed to delete invoice file: {}", e));
+        }
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn export_invoice_to_downloads(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> Result<String, String> {
+    let file_path = get_invoice_pdf_path(app_handle.clone(), id).await?;
+
+    // Get downloads directory
+    let downloads_path = app_handle
+        .path()
+        .download_dir()
+        .map_err(|e| format!("Failed to get downloads directory: {}", e))?;
+
+    // Extract filename from path
+    let filename = std::path::Path::new(&file_path)
+        .file_name()
+        .ok_or("Invalid file path")?
+        .to_str()
+        .ok_or("Invalid filename")?;
+
+    let dest_path = downloads_path.join(filename);
+    let dest_path_str = dest_path.to_str().ok_or("Invalid destination path")?;
+
+    // Copy file to downloads
+    fs::copy(&file_path, &dest_path)
+        .map_err(|e| format!("Failed to copy invoice to downloads: {}", e))?;
+
+    Ok(dest_path_str.to_string())
+}
+
+#[tauri::command]
+async fn open_file_in_default_app(path: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(&["/C", "start", "", &path])
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .map_err(|e| format!("Failed to open file: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -553,7 +858,13 @@ pub fn run() {
             stop_timer_from_tray,
             toggle_window,
             get_all_entries,
-            generate_invoice_pdf
+            generate_invoice_pdf,
+            save_invoice,
+            get_all_invoices,
+            get_invoice_pdf_path,
+            delete_invoice,
+            export_invoice_to_downloads,
+            open_file_in_default_app
         ])
         .setup(|app| {
             let assets = TrayAssets::load()?;
@@ -621,6 +932,17 @@ fn resolve_db_path(app_handle: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+fn resolve_invoices_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+    let mut dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|err| err.to_string())?;
+
+    dir.push("invoices");
+    fs::create_dir_all(&dir).map_err(|err| err.to_string())?;
+    Ok(dir)
+}
+
 async fn persist_time_entry(
     db_path: PathBuf,
     project_name: String,
@@ -660,6 +982,8 @@ fn open_connection(db_path: PathBuf) -> Result<Connection, String> {
     let conn = Connection::open(db_path).map_err(|err| err.to_string())?;
     conn.execute(CREATE_TIME_ENTRIES_TABLE_SQL, [])
         .map_err(|err| err.to_string())?;
+    conn.execute(CREATE_INVOICES_TABLE_SQL, [])
+        .map_err(|err| err.to_string())?;
     ensure_rate_columns(&conn)?;
     Ok(conn)
 }
@@ -687,12 +1011,20 @@ fn fetch_time_entry(conn: &Connection, id: i64) -> Result<TimeEntry, String> {
 }
 
 fn database_migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create_time_entries",
-        sql: CREATE_TIME_ENTRIES_TABLE_SQL,
-        kind: MigrationKind::Up,
-    }]
+    vec![
+        Migration {
+            version: 1,
+            description: "create_time_entries",
+            sql: CREATE_TIME_ENTRIES_TABLE_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "create_invoices",
+            sql: CREATE_INVOICES_TABLE_SQL,
+            kind: MigrationKind::Up,
+        },
+    ]
 }
 
 fn day_bounds_timestamps() -> Result<(i64, i64), String> {

@@ -1,6 +1,5 @@
 import { useState, useEffect, type KeyboardEvent } from "react";
 import type { TimeEntry } from "../types/time-entry";
-import { formatDuration } from "../lib/time";
 
 type OverlapWarning = {
   overlapping_entries: TimeEntry[];

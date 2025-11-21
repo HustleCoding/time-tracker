@@ -1,4 +1,3 @@
-import type { KeyboardEvent } from "react";
 import { useState, useEffect } from "react";
 import "./App.css";
 import { formatDuration } from "./lib/time";
@@ -8,6 +7,7 @@ import { EntriesSection } from "./components/EntriesSection";
 import { DeleteDialog } from "./components/DeleteDialog";
 import { EditEntryModal } from "./components/EditEntryModal";
 import { HistoryView } from "./components/HistoryView";
+import { InvoicesView } from "./components/InvoicesView";
 import { useTimeTracker } from "./hooks/useTimeTracker";
 
 function App() {
@@ -24,7 +24,6 @@ function App() {
     isStarting,
     isStopping,
     error,
-    setError,
     clearError,
     hourlyRate,
     setHourlyRate,
@@ -37,7 +36,7 @@ function App() {
     loadHistory,
   } = useTimeTracker();
 
-  const [view, setView] = useState<"timer" | "history">("timer");
+  const [view, setView] = useState<"timer" | "history" | "invoices">("timer");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editTarget, setEditTarget] = useState<TimeEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
@@ -204,6 +203,10 @@ function App() {
                 cancelEditing={() => {}}
                 saveEditing={() => {}}
               />
+            </div>
+
+            <div className={`view ${view === "invoices" ? "view--active" : ""}`}>
+              <InvoicesView />
             </div>
           </div>
         </main>

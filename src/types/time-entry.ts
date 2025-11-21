@@ -7,3 +7,14 @@ export type TimeEntry = {
   hourlyRate: number;
   amount: number;
 };
+
+export type Invoice = {
+  id: number;
+  createdAt: number;
+  businessInfo: string;
+  billToInfo: string;
+  totalHours: number;
+  totalAmount: number;
+  filePath: string;
+  entryCount: number;
+};

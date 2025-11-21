@@ -1742,3 +1742,231 @@ button {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Invoice Preview Modal */
+.invoice-preview-modal {
+  width: 90vw;
+  max-width: 600px;
+  height: auto;
+  max-height: 500px;
+  display: flex;
+  flex-direction: column;
+}
+
+.invoice-preview-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-muted);
+  border-radius: var(--radius-lg);
+  margin: 16px 0;
+}
+
+.pdf-viewer {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--radius-lg);
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+}
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  gap: 16px;
+}
+
+.error-state p {
+  color: var(--error);
+  font-size: var(--text-base);
+  text-align: center;
+}
+
+.error-state button {
+  background: var(--accent);
+  color: #fff;
+  padding: 10px 20px;
+  border: none;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+/* Invoices List */
+.invoices-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.empty-state p {
+  color: var(--text-secondary);
+  font-size: var(--text-base);
+  margin: 8px 0;
+}
+
+.empty-state-hint {
+  font-size: var(--text-sm);
+  opacity: 0.7;
+}
+
+/* Invoice Card */
+.invoice-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  background: var(--surface-elevated);
+  border: var(--border-thin) solid var(--border);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.invoice-card:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.invoice-card-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.invoice-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.invoice-date {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.invoice-date-main {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.invoice-time {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.invoice-amount {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.invoice-card-details {
+  display: flex;
+  gap: 24px;
+}
+
+.invoice-detail {
+  display: flex;
+  gap: 8px;
+  font-size: var(--text-sm);
+}
+
+.detail-label {
+  color: var(--text-secondary);
+}
+
+.detail-value {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.invoice-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 16px;
+}
+
+.action-button {
+  background: transparent;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.action-button:hover {
+  background: var(--surface-muted);
+}
+
+.delete-button:hover {
+  background: rgba(244, 67, 54, 0.1);
+}
+
+/* PDF Opened Message */
+.pdf-opened-message {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 30px 20px;
+  text-align: center;
+  gap: 12px;
+}
+
+.pdf-icon {
+  font-size: 48px;
+  margin-bottom: 4px;
+}
+
+.pdf-opened-message h3 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.pdf-opened-message p {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 4px 0;
+  max-width: 400px;
+}
+
+.pdf-path {
+  display: none;
+}

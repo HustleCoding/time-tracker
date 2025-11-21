@@ -1,6 +1,6 @@
 type SidebarProps = {
-  view: "timer" | "history";
-  onViewChange: (view: "timer" | "history") => void;
+  view: "timer" | "history" | "invoices";
+  onViewChange: (view: "timer" | "history" | "invoices") => void;
   projectName: string;
   hourlyRate: string;
   isRunning: boolean;
@@ -68,6 +68,13 @@ export function Sidebar({
             >
               <span className="sidebar__nav-icon">📋</span>
               <span className="sidebar__nav-label">History</span>
+            </button>
+            <button
+              className={`sidebar__nav-item ${view === "invoices" ? "sidebar__nav-item--active" : ""}`}
+              onClick={() => onViewChange("invoices")}
+            >
+              <span className="sidebar__nav-icon">📄</span>
+              <span className="sidebar__nav-label">Invoices</span>
             </button>
           </nav>
 
