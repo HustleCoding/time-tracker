@@ -10,14 +10,6 @@ type HistoryViewProps = {
   loading: boolean;
   onLoadHistory: (start: number, end: number) => void;
   onDeleteClick: (entry: TimeEntry) => void;
-  // We might want to support editing in history too, but let's start read-only or reuse the same handlers if passed
-  // For now, let's assume read-only or simple delete for history to keep it simple, 
-  // but the user might expect full editing. 
-  // Let's pass the edit props as optional or just mock them if we don't want to support editing yet.
-  // Actually, the plan didn't explicitly exclude editing. 
-  // Let's try to support it if possible, or just pass no-ops for now.
-  // To support editing, we need to pass all the edit handlers from App.tsx.
-  // For simplicity in this step, I'll pass the edit props through.
   editingId: number | null;
   editingName: string;
   editingRate: string;
@@ -70,10 +62,6 @@ export function HistoryView({
   const handleNextDay = () => {
     const newDate = new Date(currentDate);
     newDate.setDate(newDate.getDate() + 1);
-    
-    // Optional: Prevent going to future?
-    // if (newDate > new Date()) return;
-    
     setCurrentDate(newDate);
   };
 
@@ -81,71 +69,70 @@ export function HistoryView({
 
   return (
     <div className="history-view">
+      {/* Date Navigation */}
       <div className="history-nav">
         <div className="history-nav__controls">
-          <button className="button-nav" onClick={handlePrevDay}>
-            ← Prev
+          <button className="btn btn-secondary" onClick={handlePrevDay}>
+            ← Previous
           </button>
-          <button
-            className="button-nav"
-            onClick={handleNextDay}
-            disabled={isToday}
-            style={{ visibility: isToday ? "hidden" : "visible" }}
-          >
-            Next →
-          </button>
+          {!isToday && (
+            <button className="btn btn-secondary" onClick={handleNextDay}>
+              Next →
+            </button>
+          )}
         </div>
 
-        <div className="history-nav__center">
-          <span className="history-nav__date">
-            {currentDate.toLocaleDateString(undefined, {
-              weekday: "long",
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-            })}
-          </span>
-          <div className="history-nav__meta">
-            <span className="history-nav__pill">
-              {entries.length} {entries.length === 1 ? "entry" : "entries"}
-            </span>
-            <span className="history-nav__pill">
-              {formatDuration(totalDurationSeconds)}
-            </span>
-            <span className="history-nav__pill">
-              {formatCurrency(totalAmount)}
-            </span>
-          </div>
+        <div className="history-nav__date">
+          {currentDate.toLocaleDateString(undefined, {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })}
         </div>
 
-        <div className="history-nav__controls">
+        <div className="history-nav__actions">
           <button
-            className="button-export"
+            className="btn btn-primary"
             onClick={() => setShowInvoiceDialog(true)}
-            title="Export all entries as invoice PDF"
+            title="Create invoice from entries"
           >
-            Export Invoice
+            Create Invoice
           </button>
         </div>
       </div>
 
-      <EntriesSection
-        title={isToday ? "Today's Log" : "History Log"}
-        loading={loading}
-        entries={entries}
-        isRefreshing={false}
-        editingId={editingId}
-        editingName={editingName}
-        editingRate={editingRate}
-        onEditingNameChange={onEditingNameChange}
-        onEditingRateChange={onEditingRateChange}
-        onEditKeyDown={onEditKeyDown}
-        beginEditing={beginEditing}
-        cancelEditing={cancelEditing}
-        saveEditing={saveEditing}
-        onDeleteClick={onDeleteClick}
-      />
+      {/* Entries Table */}
+      <div className="history-entries">
+        <EntriesSection
+          title="Time Entries"
+          loading={loading}
+          entries={entries}
+          isRefreshing={false}
+          editingId={editingId}
+          editingName={editingName}
+          editingRate={editingRate}
+          onEditingNameChange={onEditingNameChange}
+          onEditingRateChange={onEditingRateChange}
+          onEditKeyDown={onEditKeyDown}
+          beginEditing={beginEditing}
+          cancelEditing={cancelEditing}
+          saveEditing={saveEditing}
+          onDeleteClick={onDeleteClick}
+        />
 
+        {/* Summary */}
+        {entries.length > 0 && (
+          <div className="history-summary">
+            <div className="history-summary__label">Total</div>
+            <div className="history-summary__value">
+              {formatDuration(totalDurationSeconds)} • {formatCurrency(totalAmount)}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Invoice Dialog */}
       <InvoiceDialog
         isOpen={showInvoiceDialog}
         onClose={() => setShowInvoiceDialog(false)}

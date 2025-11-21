@@ -14,11 +14,6 @@ export function InvoiceCard({ invoice, onPreview, onDelete }: InvoiceCardProps) 
     day: 'numeric',
   });
 
-  const formattedTime = new Date(invoice.createdAt * 1000).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm('Are you sure you want to delete this invoice?')) {
@@ -27,35 +22,29 @@ export function InvoiceCard({ invoice, onPreview, onDelete }: InvoiceCardProps) 
   };
 
   return (
-    <div className="invoice-card" onClick={() => onPreview(invoice)}>
-      <div className="invoice-card-main">
-        <div className="invoice-card-header">
-          <div className="invoice-date">
-            <div className="invoice-date-main">{formattedDate}</div>
-            <div className="invoice-time">{formattedTime}</div>
-          </div>
-          <div className="invoice-amount">{formatCurrency(invoice.totalAmount)}</div>
+    <div className="invoice-card">
+      <div className="invoice-card__main">
+        <div className="invoice-card__header">
+          <div className="invoice-card__number">Invoice #{String(invoice.id).padStart(3, '0')}</div>
+          <div className="invoice-card__date">{formattedDate}</div>
         </div>
-
-        <div className="invoice-card-details">
-          <div className="invoice-detail">
-            <span className="detail-label">Total Hours:</span>
-            <span className="detail-value">{invoice.totalHours.toFixed(2)} hrs</span>
-          </div>
-          <div className="invoice-detail">
-            <span className="detail-label">Entries:</span>
-            <span className="detail-value">{invoice.entryCount}</span>
-          </div>
-        </div>
+        <div className="invoice-card__amount">{formatCurrency(invoice.totalAmount)}</div>
       </div>
 
-      <div className="invoice-card-actions">
+      <div className="invoice-card__actions">
         <button
-          className="action-button delete-button"
+          className="btn btn-secondary"
+          onClick={() => onPreview(invoice)}
+          title="View invoice PDF"
+        >
+          View PDF
+        </button>
+        <button
+          className="btn-ghost"
           onClick={handleDelete}
           title="Delete invoice"
         >
-          🗑️
+          Delete
         </button>
       </div>
     </div>

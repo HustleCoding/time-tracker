@@ -16,23 +16,32 @@ export function DeleteDialog({
   }
 
   return (
-    <div className="delete-dialog" role="dialog" aria-modal="true">
-      <div className="delete-dialog__panel">
-        <h3 className="delete-dialog__title">Delete this entry?</h3>
-        <p className="delete-dialog__body">
-          Removing <strong>{target.projectName}</strong> can&apos;t be undone.
-          The tracked time will be removed from today&apos;s total.
-        </p>
-        <div className="delete-dialog__actions">
-          <button type="button" className="button-ghost" onClick={onCancel}>
+    <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog__header">
+          <h3 className="dialog__title">Delete Entry</h3>
+          <button className="dialog__close" onClick={onCancel} aria-label="Close">
+            ×
+          </button>
+        </div>
+
+        <div className="dialog__body">
+          <p>
+            Are you sure you want to delete <strong>{target.projectName}</strong>?
+            This action cannot be undone.
+          </p>
+        </div>
+
+        <div className="dialog__footer">
+          <button type="button" className="btn btn-secondary" onClick={onCancel}>
             Cancel
           </button>
           <button
             type="button"
-            className="delete-dialog__confirm"
+            className="btn btn-danger"
             onClick={onConfirm}
           >
-            Delete
+            Delete Entry
           </button>
         </div>
       </div>

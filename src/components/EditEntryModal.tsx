@@ -28,6 +28,11 @@ export function EditEntryModal({
   const [hours, setHours] = useState("");
   const [minutes, setMinutes] = useState("");
   const [overlapWarning, setOverlapWarning] = useState<OverlapWarning | null>(null);
+  const parsedHours = parseInt(hours, 10) || 0;
+  const parsedMinutes = parseInt(minutes, 10) || 0;
+  const requestedDurationSeconds = parsedHours * 3600 + parsedMinutes * 60;
+  const effectiveDurationSeconds =
+    requestedDurationSeconds > 0 ? requestedDurationSeconds : entry?.duration ?? 0;
 
   useEffect(() => {
     if (entry) {
@@ -49,21 +54,17 @@ export function EditEntryModal({
 
   const handleSave = async () => {
     const parsedRate = parseFloat(hourlyRate) || 0;
-    const parsedHours = parseInt(hours) || 0;
-    const parsedMinutes = parseInt(minutes) || 0;
-    const totalSeconds = parsedHours * 3600 + parsedMinutes * 60;
-
-    if (totalSeconds <= 0) {
-      alert("Duration must be greater than 0");
+    // Fallback to the existing duration so sub-minute entries can still be edited
+    if (effectiveDurationSeconds <= 0) {
+      setOverlapWarning(null);
       return;
     }
 
-    const result = await onSave(entry.id, projectName, parsedRate, totalSeconds);
+    const result = await onSave(entry.id, projectName, parsedRate, effectiveDurationSeconds);
 
     if (result && result.overlap_warning) {
       setOverlapWarning(result.overlap_warning);
     } else {
-      // Close modal if save was successful and no overlaps
       setOverlapWarning(null);
     }
   };
@@ -71,54 +72,61 @@ export function EditEntryModal({
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      handleSave();
+      void handleSave();
     } else if (event.key === "Escape") {
       event.preventDefault();
       onCancel();
     }
   };
 
-  const calculatedEndTime = entry.startTime + (parseInt(hours) || 0) * 3600 + (parseInt(minutes) || 0) * 60;
+  const calculatedEndTime = entry.startTime + effectiveDurationSeconds;
 
   return (
-    <div className="edit-dialog" role="dialog" aria-modal="true">
-      <div className="edit-dialog__panel">
-        <h3 className="edit-dialog__title">Edit Time Entry</h3>
+    <div className="dialog-overlay" role="dialog" aria-modal="true" onClick={onCancel}>
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="dialog__header">
+          <h3 className="dialog__title">Edit Time Entry</h3>
+          <button className="dialog__close" onClick={onCancel} aria-label="Close">
+            ×
+          </button>
+        </div>
 
-        <div className="edit-dialog__body">
+        <div className="dialog__body">
           {overlapWarning && (
-            <div className="edit-dialog__warning">
-              <strong>⚠️ Warning:</strong> This time entry overlaps with {overlapWarning.overlapping_entries.length} other {overlapWarning.overlapping_entries.length === 1 ? 'entry' : 'entries'}:
-              <ul className="edit-dialog__overlap-list">
-                {overlapWarning.overlapping_entries.map((overlap) => (
-                  <li key={overlap.id}>
-                    {overlap.projectName} ({new Date(overlap.startTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} - {new Date(overlap.endTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
-                  </li>
-                ))}
-              </ul>
-              <p>You can still save, but you may want to adjust the duration.</p>
+            <div className="message message--warning">
+              <div>
+                <strong>Warning:</strong> This entry overlaps with {overlapWarning.overlapping_entries.length} other{" "}
+                {overlapWarning.overlapping_entries.length === 1 ? "entry" : "entries"}.
+                You can still save, but you may want to adjust the duration.
+              </div>
             </div>
           )}
 
-          <div className="edit-dialog__field">
-            <label className="edit-dialog__label">Project Name</label>
+          <div className="form-field">
+            <label className="form-label" htmlFor="edit-project">
+              Project Name
+            </label>
             <input
-              className="edit-dialog__input"
+              id="edit-project"
+              className="form-input"
               type="text"
               value={projectName}
               onChange={(e) => setProjectName(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Project Name"
+              placeholder="Project name"
               autoFocus
             />
           </div>
 
-          <div className="edit-dialog__field">
-            <label className="edit-dialog__label">Hourly Rate</label>
-            <div className="edit-dialog__input-group">
-              <span className="edit-dialog__input-prefix">$</span>
+          <div className="form-field">
+            <label className="form-label" htmlFor="edit-rate">
+              Hourly Rate
+            </label>
+            <div className="input-group">
+              <span className="input-group__prefix">$</span>
               <input
-                className="edit-dialog__input edit-dialog__input--with-prefix"
+                id="edit-rate"
+                className="input-group__input"
                 type="text"
                 inputMode="decimal"
                 value={hourlyRate}
@@ -126,15 +134,16 @@ export function EditEntryModal({
                 onKeyDown={handleKeyDown}
                 placeholder="0"
               />
+              <span className="input-group__suffix">/h</span>
             </div>
           </div>
 
-          <div className="edit-dialog__field">
-            <label className="edit-dialog__label">Duration</label>
-            <div className="edit-dialog__duration-inputs">
-              <div className="edit-dialog__duration-field">
+          <div className="form-field">
+            <label className="form-label">Duration</label>
+            <div style={{ display: "flex", gap: "12px" }}>
+              <div style={{ flex: 1 }}>
                 <input
-                  className="edit-dialog__input edit-dialog__input--small"
+                  className="form-input"
                   type="text"
                   inputMode="numeric"
                   value={hours}
@@ -142,11 +151,13 @@ export function EditEntryModal({
                   onKeyDown={handleKeyDown}
                   placeholder="0"
                 />
-                <span className="edit-dialog__duration-label">hours</span>
+                <div style={{ fontSize: "var(--text-small)", color: "var(--text-tertiary)", marginTop: "4px" }}>
+                  hours
+                </div>
               </div>
-              <div className="edit-dialog__duration-field">
+              <div style={{ flex: 1 }}>
                 <input
-                  className="edit-dialog__input edit-dialog__input--small"
+                  className="form-input"
                   type="text"
                   inputMode="numeric"
                   value={minutes}
@@ -154,31 +165,33 @@ export function EditEntryModal({
                   onKeyDown={handleKeyDown}
                   placeholder="0"
                 />
-                <span className="edit-dialog__duration-label">minutes</span>
+                <div style={{ fontSize: "var(--text-small)", color: "var(--text-tertiary)", marginTop: "4px" }}>
+                  minutes
+                </div>
               </div>
             </div>
           </div>
 
-          <div className="edit-dialog__info">
-            <div className="edit-dialog__info-row">
-              <span className="edit-dialog__info-label">Start Time:</span>
-              <span className="edit-dialog__info-value">
-                {new Date(entry.startTime * 1000).toLocaleString()}
-              </span>
+          <div style={{
+            padding: "var(--space-4)",
+            background: "var(--surface-subtle)",
+            borderRadius: "var(--radius)",
+            fontSize: "var(--text-small)",
+            color: "var(--text-secondary)"
+          }}>
+            <div style={{ marginBottom: "var(--space-2)" }}>
+              <strong>Start:</strong> {new Date(entry.startTime * 1000).toLocaleString()}
             </div>
-            <div className="edit-dialog__info-row">
-              <span className="edit-dialog__info-label">End Time:</span>
-              <span className="edit-dialog__info-value">
-                {new Date(calculatedEndTime * 1000).toLocaleString()}
-              </span>
+            <div>
+              <strong>End:</strong> {new Date(calculatedEndTime * 1000).toLocaleString()}
             </div>
           </div>
         </div>
 
-        <div className="edit-dialog__actions">
+        <div className="dialog__footer">
           <button
             type="button"
-            className="button-ghost"
+            className="btn btn-secondary"
             onClick={onCancel}
             disabled={isSaving}
           >
@@ -186,8 +199,8 @@ export function EditEntryModal({
           </button>
           <button
             type="button"
-            className="edit-dialog__confirm"
-            onClick={handleSave}
+            className="btn btn-primary"
+            onClick={() => void handleSave()}
             disabled={isSaving}
           >
             {isSaving ? "Saving..." : "Save Changes"}

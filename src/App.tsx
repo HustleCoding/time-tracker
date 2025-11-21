@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import "./App.css";
 import { formatDuration } from "./lib/time";
 import type { TimeEntry } from "./types/time-entry";
-import { Sidebar } from "./components/Sidebar";
 import { EntriesSection } from "./components/EntriesSection";
 import { DeleteDialog } from "./components/DeleteDialog";
 import { EditEntryModal } from "./components/EditEntryModal";
@@ -36,8 +35,7 @@ function App() {
     loadHistory,
   } = useTimeTracker();
 
-  const [view, setView] = useState<"timer" | "history" | "invoices">("timer");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [view, setView] = useState<"today" | "history" | "invoices">("today");
   const [editTarget, setEditTarget] = useState<TimeEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<TimeEntry | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -103,7 +101,7 @@ function App() {
       // Cmd/Ctrl + Enter to start/stop timer
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        if (view === "timer") {
+        if (view === "today") {
           if (isRunning) {
             void stopTimer();
           } else if (!isStartDisabled) {
@@ -113,7 +111,7 @@ function App() {
       }
 
       // Escape to clear project name input when not running
-      if (event.key === "Escape" && !isRunning && view === "timer") {
+      if (event.key === "Escape" && !isRunning && view === "today") {
         setProjectName("");
       }
     };
@@ -124,100 +122,197 @@ function App() {
 
   return (
     <div className="app">
-      <div className="app__layout">
-        <Sidebar
-          view={view}
-          onViewChange={setView}
-          projectName={projectName}
-          hourlyRate={hourlyRate}
-          isRunning={isRunning}
-          timerDisplay={timerDisplay}
-          isStartDisabled={isStartDisabled}
-          isStarting={isStarting}
-          isStopping={isStopping}
-          todayTotalSeconds={todayTotalSeconds}
-          todayTotalAmount={todayTotalAmount}
-          onProjectNameChange={setProjectName}
-          onHourlyRateChange={setHourlyRate}
-          onStart={() => {
-            void startTimer();
-          }}
-          onStop={() => {
-            void stopTimer();
-          }}
-          isCollapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
+      {/* Top Navigation */}
+      <nav className="app__nav">
+        <div className="app__nav-left">
+          <div className="app__logo">TimeTracker</div>
+          <div className="app__nav-links">
+            <button
+              className={`app__nav-link ${view === "today" ? "app__nav-link--active" : ""}`}
+              onClick={() => setView("today")}
+            >
+              Today
+            </button>
+            <button
+              className={`app__nav-link ${view === "history" ? "app__nav-link--active" : ""}`}
+              onClick={() => setView("history")}
+            >
+              History
+            </button>
+            <button
+              className={`app__nav-link ${view === "invoices" ? "app__nav-link--active" : ""}`}
+              onClick={() => setView("invoices")}
+            >
+              Invoices
+            </button>
+          </div>
+        </div>
 
-        <main className="app__main-content">
-          {error && (
-            <div className="error-banner">
-              <span>{error}</span>
-              <button
-                className="error-banner__close"
-                onClick={clearError}
-                aria-label="Dismiss error"
-              >
-                ×
-              </button>
-            </div>
-          )}
+        {/* Always visible timer in nav */}
+        <div className="app__nav-timer">
+          <div className={`app__nav-timer-status ${isRunning ? "app__nav-timer-status--running" : ""}`} />
+          {timerDisplay}
+        </div>
+      </nav>
 
-          <div className="view-switcher">
-            <div className={`view ${view === "timer" ? "view--active" : ""}`}>
-              <EntriesSection
-                loading={loading}
-                entries={entries}
-                isRefreshing={isRefreshing}
-                editingId={null}
-                editingName=""
-                editingRate=""
-                onEditingNameChange={() => {}}
-                onEditingRateChange={() => {}}
-                onEditKeyDown={() => {}}
-                beginEditing={openEditModal}
-                cancelEditing={() => {}}
-                saveEditing={() => {}}
-                onDeleteClick={(entry) => {
-                  setDeleteTarget(entry);
-                }}
-                onRefresh={() => {
-                  void refreshEntries();
-                }}
-              />
-            </div>
+      {/* Main Content Area */}
+      <main className="app__main">
+        {error && (
+          <div className="message message--error">
+            <span>{error}</span>
+            <button
+              className="btn-ghost"
+              onClick={clearError}
+              aria-label="Dismiss error"
+              style={{ marginLeft: "auto" }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
-            <div className={`view ${view === "history" ? "view--active" : ""}`}>
-              <HistoryView
-                entries={historyEntries}
-                loading={loading}
-                onLoadHistory={loadHistory}
-                onDeleteClick={(entry) => setDeleteTarget(entry)}
-                editingId={null}
-                editingName=""
-                editingRate=""
-                onEditingNameChange={() => {}}
-                onEditingRateChange={() => {}}
-                onEditKeyDown={() => {}}
-                beginEditing={openEditModal}
-                cancelEditing={() => {}}
-                saveEditing={() => {}}
-              />
-            </div>
+        <div className="view-switcher">
+          {/* Today View */}
+          <div className={`view ${view === "today" ? "view--active" : ""}`}>
+            <div className="today-view">
+              {/* Timer Hero Section */}
+              <div className="timer-hero">
+                <div className="timer-display">{timerDisplay}</div>
+                <div className={`timer-status ${isRunning ? "timer-status--running" : ""}`}>
+                  {isRunning ? "Running" : "Idle"}
+                </div>
 
-            <div className={`view ${view === "invoices" ? "view--active" : ""}`}>
-              <InvoicesView />
+                <div className="timer-controls">
+                  {!isRunning ? (
+                    <>
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="project-input">
+                          Project
+                        </label>
+                        <input
+                          id="project-input"
+                          type="text"
+                          className="form-input"
+                          placeholder="What are you working on?"
+                          value={projectName}
+                          onChange={(e) => setProjectName(e.target.value)}
+                          disabled={isRunning}
+                          autoFocus
+                        />
+                      </div>
+
+                      <div className="form-field">
+                        <label className="form-label" htmlFor="rate-input">
+                          Hourly Rate
+                        </label>
+                        <div className="input-group">
+                          <span className="input-group__prefix">$</span>
+                          <input
+                            id="rate-input"
+                            type="number"
+                            className="input-group__input"
+                            placeholder="0"
+                            value={hourlyRate}
+                            onChange={(e) => setHourlyRate(e.target.value)}
+                            disabled={isRunning}
+                          />
+                          <span className="input-group__suffix">/h</span>
+                        </div>
+                      </div>
+
+                      <button
+                        className="btn btn-primary"
+                        onClick={() => void startTimer()}
+                        disabled={isStartDisabled || isStarting}
+                      >
+                        {isStarting ? "Starting..." : "Start Timer"}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="timer-info">
+                        <div className="timer-info__item">
+                          <div className="timer-info__label">Project</div>
+                          <div className="timer-info__value">{projectName}</div>
+                        </div>
+                        <div className="timer-info__item">
+                          <div className="timer-info__label">Rate</div>
+                          <div className="timer-info__value">${hourlyRate}/h</div>
+                        </div>
+                      </div>
+
+                      <button
+                        className="btn btn-danger"
+                        onClick={() => void stopTimer()}
+                        disabled={isStopping}
+                      >
+                        {isStopping ? "Stopping..." : "Stop Timer"}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Today's Entries */}
+              <div className="today-entries">
+                <div className="today-entries__header">
+                  <h2 className="today-entries__title">Time Entries</h2>
+                  <div className="today-entries__total">
+                    {formatDuration(todayTotalSeconds)} • ${todayTotalAmount.toFixed(2)}
+                  </div>
+                </div>
+
+                <EntriesSection
+                  loading={loading}
+                  entries={entries}
+                  isRefreshing={isRefreshing}
+                  editingId={null}
+                  editingName=""
+                  editingRate=""
+                  onEditingNameChange={() => {}}
+                  onEditingRateChange={() => {}}
+                  onEditKeyDown={() => {}}
+                  beginEditing={openEditModal}
+                  cancelEditing={() => {}}
+                  saveEditing={() => {}}
+                  onDeleteClick={(entry) => setDeleteTarget(entry)}
+                  onRefresh={() => void refreshEntries()}
+                />
+              </div>
             </div>
           </div>
-        </main>
-      </div>
 
+          {/* History View */}
+          <div className={`view ${view === "history" ? "view--active" : ""}`}>
+            <HistoryView
+              entries={historyEntries}
+              loading={loading}
+              onLoadHistory={loadHistory}
+              onDeleteClick={(entry) => setDeleteTarget(entry)}
+              editingId={null}
+              editingName=""
+              editingRate=""
+              onEditingNameChange={() => {}}
+              onEditingRateChange={() => {}}
+              onEditKeyDown={() => {}}
+              beginEditing={openEditModal}
+              cancelEditing={() => {}}
+              saveEditing={() => {}}
+            />
+          </div>
+
+          {/* Invoices View */}
+          <div className={`view ${view === "invoices" ? "view--active" : ""}`}>
+            <InvoicesView />
+          </div>
+        </div>
+      </main>
+
+      {/* Modals */}
       <DeleteDialog
         target={deleteTarget}
         onCancel={cancelDelete}
-        onConfirm={() => {
-          void confirmDelete();
-        }}
+        onConfirm={() => void confirmDelete()}
       />
 
       <EditEntryModal
