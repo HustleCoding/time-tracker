@@ -10,6 +10,7 @@ use tauri::{
     AppHandle, Emitter, Manager, Runtime, WindowEvent,
 };
 use tauri_plugin_sql::{Migration, MigrationKind};
+use tauri_plugin_opener::OpenerExt;
 
 mod pdf_generator;
 
@@ -440,130 +441,16 @@ async fn start_timer_from_tray(
     } else {
         project_name
     };
-    start_timer_internal(&app_handle, name, 0.0)
+    let db_path = resolve_db_path(&app_handle)?;
+    let last_rate = tauri::async_runtime::spawn_blocking(move || last_used_hourly_rate(db_path))
+        .await
+        .map_err(|e| e.to_string())??;
+    start_timer_internal(&app_handle, name, last_rate)
 }
 
 #[tauri::command]
 async fn stop_timer_from_tray(app_handle: tauri::AppHandle) -> Result<Option<TimeEntry>, String> {
     stop_timer_internal(&app_handle).await
-}
-
-#[tauri::command]
-async fn toggle_window(app_handle: tauri::AppHandle) -> Result<(), String> {
-    toggle_main_window(&app_handle);
-    refresh_tray(&app_handle).map_err(|err| err.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-async fn get_all_entries(app_handle: tauri::AppHandle) -> Result<Vec<TimeEntry>, String> {
-    let db_path = resolve_db_path(&app_handle)?;
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_connection(db_path)?;
-
-        let mut stmt = conn
-            .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time DESC")
-            .map_err(|e| e.to_string())?;
-
-        let entries = stmt
-            .query_map([], |row| {
-                Ok(TimeEntry {
-                    id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    start_time: row.get(2)?,
-                    end_time: row.get(3)?,
-                    duration: row.get(4)?,
-                    hourly_rate: row.get(5)?,
-                    amount: row.get(6)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-
-        Ok(entries)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn generate_invoice_pdf(
-    app_handle: tauri::AppHandle,
-    business_info: BusinessInfo,
-) -> Result<String, String> {
-    let db_path = resolve_db_path(&app_handle)?;
-
-    // Get all entries
-    let entries = tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_connection(db_path)?;
-
-        let mut stmt = conn
-            .prepare("SELECT id, project_name, start_time, end_time, duration, hourly_rate, amount FROM time_entries ORDER BY start_time ASC")
-            .map_err(|e| e.to_string())?;
-
-        let entries = stmt
-            .query_map([], |row| {
-                Ok(TimeEntry {
-                    id: row.get(0)?,
-                    project_name: row.get(1)?,
-                    start_time: row.get(2)?,
-                    end_time: row.get(3)?,
-                    duration: row.get(4)?,
-                    hourly_rate: row.get(5)?,
-                    amount: row.get(6)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-
-        Ok::<Vec<TimeEntry>, String>(entries)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    // Determine output path (Downloads folder)
-    let downloads_path = app_handle
-        .path()
-        .download_dir()
-        .map_err(|e| format!("Failed to get downloads directory: {}", e))?;
-
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let filename = format!("time_tracking_invoice_{}.pdf", timestamp);
-    let output_path = downloads_path.join(&filename);
-    let output_path_str = output_path.to_str().ok_or("Invalid path")?;
-
-    // Convert entries to pdf_generator format
-    let pdf_entries: Vec<pdf_generator::TimeEntry> = entries
-        .into_iter()
-        .map(|e| pdf_generator::TimeEntry {
-            id: e.id,
-            project_name: e.project_name,
-            start_time: e.start_time,
-            end_time: e.end_time,
-            duration: e.duration,
-            hourly_rate: e.hourly_rate,
-            amount: e.amount,
-        })
-        .collect();
-
-    let pdf_business_info = pdf_generator::BusinessInfo {
-        name: business_info.name,
-        address: business_info.address,
-        email: business_info.email,
-        phone: business_info.phone,
-        client_name: business_info.client_name,
-        client_address: business_info.client_address,
-        client_email: business_info.client_email,
-        client_phone: business_info.client_phone,
-    };
-
-    // Generate PDF
-    pdf_generator::generate_invoice(pdf_entries, pdf_business_info, output_path_str)?;
-
-    Ok(output_path_str.to_string())
 }
 
 #[tauri::command]
@@ -679,7 +566,8 @@ async fn save_invoice(
     };
 
     // Generate PDF
-    pdf_generator::generate_invoice(pdf_entries, pdf_business_info, &output_path_str)?;
+    let period = start_time.and_then(|s| end_time.map(|e| pdf_generator::InvoicePeriod { start_time: s, end_time: e }));
+    pdf_generator::generate_invoice(pdf_entries, pdf_business_info, &output_path_str, period)?;
 
     // Serialize business info to JSON
     let business_info_json = serde_json::to_string(&business_info)
@@ -843,31 +731,15 @@ async fn export_invoice_to_downloads(
 }
 
 #[tauri::command]
-async fn open_file_in_default_app(path: String) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("cmd")
-            .args(&["/C", "start", "", &path])
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&path)
-            .spawn()
-            .map_err(|e| format!("Failed to open file: {}", e))?;
-    }
-
+async fn open_file_in_default_app(app_handle: tauri::AppHandle, path: String) -> Result<(), String> {
+    let resolved = PathBuf::from(path);
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|e| format!("Invalid file path: {}", e))?;
+    app_handle
+        .opener()
+        .open_path(canonical.to_string_lossy().to_string(), None::<String>)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
     Ok(())
 }
 
@@ -902,9 +774,6 @@ pub fn run() {
             stop_timer,
             start_timer_from_tray,
             stop_timer_from_tray,
-            toggle_window,
-            get_all_entries,
-            generate_invoice_pdf,
             save_invoice,
             get_all_invoices,
             get_invoice_pdf_path,
@@ -1374,6 +1243,20 @@ fn load_active_timer(db_path: PathBuf) -> Result<Option<ActiveTimer>, String> {
     match result {
         Ok(timer) => Ok(Some(timer)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn last_used_hourly_rate(db_path: PathBuf) -> Result<f64, String> {
+    let conn = open_connection(db_path)?;
+    let result = conn.query_row(
+        "SELECT hourly_rate FROM time_entries ORDER BY start_time DESC LIMIT 1",
+        [],
+        |row| row.get::<_, f64>(0),
+    );
+    match result {
+        Ok(rate) => Ok(sanitize_hourly_rate(rate)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0.0),
         Err(err) => Err(err.to_string()),
     }
 }

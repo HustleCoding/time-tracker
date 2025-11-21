@@ -28,6 +28,7 @@ export function EditEntryModal({
   const [hours, setHours] = useState("");
   const [minutes, setMinutes] = useState("");
   const [overlapWarning, setOverlapWarning] = useState<OverlapWarning | null>(null);
+  const [durationError, setDurationError] = useState<string | null>(null);
   const parsedHours = parseInt(hours, 10) || 0;
   const parsedMinutes = parseInt(minutes, 10) || 0;
   const requestedDurationSeconds = parsedHours * 3600 + parsedMinutes * 60;
@@ -45,6 +46,7 @@ export function EditEntryModal({
       setHours(totalHours.toString());
       setMinutes(totalMinutes.toString());
       setOverlapWarning(null);
+      setDurationError(null);
     }
   }, [entry]);
 
@@ -56,9 +58,11 @@ export function EditEntryModal({
     const parsedRate = parseFloat(hourlyRate) || 0;
     // Fallback to the existing duration so sub-minute entries can still be edited
     if (effectiveDurationSeconds <= 0) {
+      setDurationError("Duration must be greater than zero.");
       setOverlapWarning(null);
       return;
     }
+    setDurationError(null);
 
     const result = await onSave(entry.id, projectName, parsedRate, effectiveDurationSeconds);
 
@@ -99,6 +103,11 @@ export function EditEntryModal({
                 {overlapWarning.overlapping_entries.length === 1 ? "entry" : "entries"}.
                 You can still save, but you may want to adjust the duration.
               </div>
+            </div>
+          )}
+          {durationError && (
+            <div className="message message--error">
+              <span>{durationError}</span>
             </div>
           )}
 

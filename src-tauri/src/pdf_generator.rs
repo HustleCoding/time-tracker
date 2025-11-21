@@ -1,9 +1,9 @@
 use printpdf::*;
 use std::fs::File;
 use std::io::BufWriter;
-use chrono::{DateTime, Local};
-use std::collections::HashMap;
+use chrono::Local;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TimeEntry {
     pub id: i64,
@@ -15,6 +15,7 @@ pub struct TimeEntry {
     pub amount: f64,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct BusinessInfo {
     pub name: String,
@@ -27,17 +28,21 @@ pub struct BusinessInfo {
     pub client_phone: Option<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct InvoicePeriod {
+    pub start_time: i64,
+    pub end_time: i64,
+}
+
 pub fn generate_invoice(
     entries: Vec<TimeEntry>,
     business_info: BusinessInfo,
     output_path: &str,
+    _period: Option<InvoicePeriod>,
 ) -> Result<(), String> {
     // Create PDF document
-    let title_text = if business_info.name.trim().is_empty() {
-        "Invoice".to_string()
-    } else {
-        business_info.name.trim().to_string()
-    };
+    let title_text = "Invoice".to_string();
 
     let (doc, page1, layer1) = PdfDocument::new(
         &title_text,
@@ -46,44 +51,46 @@ pub fn generate_invoice(
         "Layer 1",
     );
 
-    let current_layer = doc.get_page(page1).get_layer(layer1);
-
-    // Load fonts
     let font_bold = doc.add_builtin_font(BuiltinFont::HelveticaBold)
         .map_err(|e| format!("Failed to load font: {}", e))?;
     let font_regular = doc.add_builtin_font(BuiltinFont::Helvetica)
         .map_err(|e| format!("Failed to load font: {}", e))?;
 
-    let mut y_position: f32 = 260.0; // Start from top
+    let current_layer = doc.get_page(page1).get_layer(layer1);
 
-    // Title (business name or generic Invoice)
-    if !title_text.is_empty() {
-        current_layer.use_text(
-            &title_text,
-            24.0,
-            Mm(20.0),
-            Mm(y_position),
-            &font_bold,
-        );
-        y_position -= 10.0_f32;
-    }
+    let mut y_position: f32 = 260.0;
 
-    // Invoice metadata
-    let now = Local::now();
+    // Header
     current_layer.use_text(
-        &format!("Invoice Date: {}", now.format("%B %d, %Y")),
-        10.0,
+        &title_text,
+        24.0,
+        Mm(20.0),
+        Mm(y_position),
+        &font_bold,
+    );
+    y_position -= 12.0_f32;
+
+    let issue_date = Local::now();
+    current_layer.use_text(
+        &format!("Issue date: {}", issue_date.format("%d/%m/%Y")),
+        11.0,
         Mm(20.0),
         Mm(y_position),
         &font_regular,
     );
-    y_position -= 12.0_f32;
+    y_position -= 10.0_f32;
+    y_position -= 8.0_f32;
 
+    // Divider
+    draw_line(&current_layer, 20.0, y_position, 190.0, y_position, 0.3);
+    y_position -= 14.0_f32;
+
+    // Two columns: Bill from / Bill to
     let from_y = write_contact_block(
         &current_layer,
         &font_bold,
         &font_regular,
-        "FROM",
+        "Bill from",
         20.0,
         y_position,
         &business_info.name,
@@ -96,8 +103,8 @@ pub fn generate_invoice(
         &current_layer,
         &font_bold,
         &font_regular,
-        "BILL TO",
-        130.0,
+        "Bill to",
+        120.0,
         y_position,
         business_info
             .client_name
@@ -109,136 +116,77 @@ pub fn generate_invoice(
         &business_info.client_phone,
     );
 
-    y_position = from_y.min(to_y) - 10.0_f32;
+    y_position = from_y.min(to_y) - 18.0_f32;
 
-    // Group entries by project
-    let mut projects: HashMap<String, Vec<TimeEntry>> = HashMap::new();
-    for entry in entries {
-        projects
-            .entry(entry.project_name.clone())
-            .or_insert_with(Vec::new)
-            .push(entry);
-    }
+    // Table Header
+    current_layer.use_text("Description", 10.0, Mm(20.0), Mm(y_position), &font_regular);
+    current_layer.use_text("Quantity", 10.0, Mm(110.0), Mm(y_position), &font_regular);
+    current_layer.use_text("Unit Price", 10.0, Mm(140.0), Mm(y_position), &font_regular);
+    current_layer.use_text("Amount", 10.0, Mm(175.0), Mm(y_position), &font_regular);
+    y_position -= 6.0_f32;
+    draw_line(&current_layer, 20.0, y_position, 190.0, y_position, 0.4);
+    y_position -= 10.0_f32;
 
-    // Time entries section
+    // Aggregate totals
+    let total_hours: f64 = entries.iter().map(|e| e.duration as f64 / 3600.0).sum();
+    let total_amount: f64 = entries.iter().map(|e| e.amount).sum();
+    let unit_price = if total_hours > 0.0 { total_amount / total_hours } else { 0.0 };
+
+    // Single row summary
+    current_layer.use_text("Hours worked", 10.0, Mm(20.0), Mm(y_position), &font_regular);
     current_layer.use_text(
-        "TIME ENTRIES:",
-        12.0,
-        Mm(20.0),
-        Mm(y_position),
-        &font_bold,
-    );
-    y_position -= 8.0_f32;
-
-    let mut total_hours = 0.0;
-    let mut total_amount = 0.0;
-
-    // Sort projects by name for consistent ordering
-    let mut project_names: Vec<String> = projects.keys().cloned().collect();
-    project_names.sort();
-
-    for project_name in project_names {
-        let project_entries = projects.get(&project_name).unwrap();
-
-        // Project header
-        current_layer.use_text(
-            &project_name,
-            11.0,
-            Mm(20.0),
-            Mm(y_position),
-            &font_bold,
-        );
-            y_position -= 6.0_f32;
-
-        let mut project_duration = 0;
-        let mut project_amount = 0.0;
-
-        for entry in project_entries {
-            let start_dt = DateTime::from_timestamp(entry.start_time, 0)
-                .unwrap_or_else(|| Local::now().into());
-            let end_dt = DateTime::from_timestamp(entry.end_time, 0)
-                .unwrap_or_else(|| Local::now().into());
-
-            let date_str = start_dt.format("%b %d, %Y").to_string();
-            let time_range = format!(
-                "{} - {}",
-                start_dt.format("%H:%M"),
-                end_dt.format("%H:%M")
-            );
-
-            let duration_str = format_duration(entry.duration);
-
-            current_layer.use_text(
-                &format!("  {} | {} | {} hrs @ ${}/hr",
-                    date_str, time_range, duration_str, entry.hourly_rate),
-                9.0,
-                Mm(25.0),
-                Mm(y_position),
-                &font_regular,
-            );
-
-            current_layer.use_text(
-                &format!("${:.2}", entry.amount),
-                9.0,
-                Mm(170.0),
-                Mm(y_position),
-                &font_regular,
-            );
-
-            y_position -= 5.0_f32;
-            project_duration += entry.duration;
-            project_amount += entry.amount;
-        }
-
-        // Project subtotal
-        current_layer.use_text(
-            &format!("  Subtotal: {}", format_duration(project_duration)),
-            10.0,
-            Mm(25.0),
-            Mm(y_position),
-            &font_bold,
-        );
-
-        current_layer.use_text(
-            &format!("${:.2}", project_amount),
-            10.0,
-            Mm(170.0),
-            Mm(y_position),
-            &font_bold,
-        );
-
-        y_position -= 8.0_f32;
-
-        total_hours += project_duration as f64 / 3600.0;
-        total_amount += project_amount;
-    }
-
-    y_position -= 5.0_f32;
-
-    // Separator line (using text characters as a simple alternative)
-    current_layer.use_text(
-        "―――――――――――――――――――――――――――――――――――――――――――――――――――",
+        &format!("{:.2}", total_hours),
         10.0,
-        Mm(20.0),
+        Mm(110.0),
         Mm(y_position),
         &font_regular,
     );
-
-    y_position -= 8.0_f32;
-
-    // Total section
     current_layer.use_text(
-        &format!("TOTAL HOURS: {}", format_total_hours(total_hours)),
+        &format_money(unit_price),
+        10.0,
+        Mm(140.0),
+        Mm(y_position),
+        &font_regular,
+    );
+    current_layer.use_text(
+        &format_money(total_amount),
+        10.0,
+        Mm(175.0),
+        Mm(y_position),
+        &font_regular,
+    );
+    y_position -= 12.0_f32;
+
+    draw_line(&current_layer, 20.0, y_position, 190.0, y_position, 0.3);
+    y_position -= 12.0_f32;
+
+    // Totals
+    current_layer.use_text(
+        "SUBTOTAL",
+        10.0,
+        Mm(140.0),
+        Mm(y_position),
+        &font_regular,
+    );
+    current_layer.use_text(
+        &format_money(total_amount),
+        10.0,
+        Mm(175.0),
+        Mm(y_position),
+        &font_regular,
+    );
+    y_position -= 10.0_f32;
+    current_layer.use_text(
+        "TOTAL",
         12.0,
-        Mm(20.0),
+        Mm(140.0),
         Mm(y_position),
         &font_bold,
     );
-
     current_layer.use_text(
-        &format!("${:.2}", total_amount),
-        14.0,
-        Mm(160.0),
+        &format_money(total_amount),
+        12.0,
+        Mm(175.0),
         Mm(y_position),
         &font_bold,
     );
@@ -254,19 +202,8 @@ pub fn generate_invoice(
     Ok(())
 }
 
-fn format_duration(seconds: i64) -> String {
-    let hours = seconds / 3600;
-    let minutes = (seconds % 3600) / 60;
-
-    if hours > 0 {
-        format!("{}.{:02}", hours, (minutes as f64 / 60.0 * 100.0) as i32)
-    } else {
-        format!("0.{:02}", (minutes as f64 / 60.0 * 100.0) as i32)
-    }
-}
-
-fn format_total_hours(hours: f64) -> String {
-    format!("{:.2} hrs", hours)
+fn format_money(amount: f64) -> String {
+    format!("{:.2} USD", amount)
 }
 
 fn write_contact_block(
@@ -323,4 +260,16 @@ fn write_contact_block(
     }
 
     y
+}
+
+fn draw_line(layer: &PdfLayerReference, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32) {
+    let line = Line {
+        points: vec![
+            (Point::new(Mm(x1), Mm(y1)), false),
+            (Point::new(Mm(x2), Mm(y2)), false),
+        ],
+        is_closed: false,
+    };
+    layer.set_outline_thickness(thickness);
+    layer.add_line(line);
 }
