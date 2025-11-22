@@ -2,6 +2,10 @@
 
 Local-first desktop time tracking with invoicing. Built on Tauri (Rust backend, React/TS frontend).
 
+## Demo link
+
+https://drive.google.com/file/d/19ijgUzdIawszL2qVmWDaF3lkQvgwf9xG/view?usp=sharing
+
 ## Requirements
 
 - Node 18+ and pnpm (`corepack enable pnpm`)
