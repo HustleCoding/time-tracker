@@ -92,6 +92,7 @@ pub fn generate_invoice(
         &font_regular,
         "Bill from",
         20.0,
+        85.0,
         y_position,
         &business_info.name,
         &business_info.address,
@@ -105,6 +106,7 @@ pub fn generate_invoice(
         &font_regular,
         "Bill to",
         120.0,
+        70.0,
         y_position,
         business_info
             .client_name
@@ -212,6 +214,7 @@ fn write_contact_block(
     font_regular: &IndirectFontRef,
     label: &str,
     x: f32,
+    max_width_mm: f32,
     mut y: f32,
     name: &str,
     address: &Option<String>,
@@ -222,44 +225,144 @@ fn write_contact_block(
     y -= 6.0_f32;
 
     if !name.trim().is_empty() {
-        layer.use_text(name, 10.0, Mm(x), Mm(y), font_regular);
-        y -= 5.0_f32;
+        y = write_wrapped_text(layer, font_regular, name.trim(), 10.0, x, y, max_width_mm);
     }
 
     if let Some(value) = address {
         if !value.trim().is_empty() {
-            layer.use_text(value.trim(), 10.0, Mm(x), Mm(y), font_regular);
-            y -= 5.0_f32;
+            y = write_wrapped_text(layer, font_regular, value.trim(), 10.0, x, y, max_width_mm);
         }
     }
 
     if let Some(value) = email {
         if !value.trim().is_empty() {
-            layer.use_text(
+            y = write_wrapped_text(
+                layer,
+                font_regular,
                 &format!("Email: {}", value.trim()),
                 10.0,
-                Mm(x),
-                Mm(y),
-                font_regular,
+                x,
+                y,
+                max_width_mm,
             );
-            y -= 5.0_f32;
         }
     }
 
     if let Some(value) = phone {
         if !value.trim().is_empty() {
-            layer.use_text(
+            y = write_wrapped_text(
+                layer,
+                font_regular,
                 &format!("Phone: {}", value.trim()),
                 10.0,
-                Mm(x),
-                Mm(y),
-                font_regular,
+                x,
+                y,
+                max_width_mm,
             );
-            y -= 5.0;
         }
     }
 
     y
+}
+
+fn write_wrapped_text(
+    layer: &PdfLayerReference,
+    font: &IndirectFontRef,
+    text: &str,
+    font_size: f32,
+    x: f32,
+    mut y: f32,
+    max_width_mm: f32,
+) -> f32 {
+    let max_chars = max_characters_for_width(max_width_mm, font_size);
+    for line in wrap_text(text, max_chars) {
+        layer.use_text(line, font_size, Mm(x), Mm(y), font);
+        y -= 5.0_f32;
+    }
+    y
+}
+
+fn wrap_text(text: &str, max_chars: usize) -> Vec<String> {
+    if max_chars == 0 {
+        return vec![text.to_string()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = String::new();
+    let mut current_len = 0usize;
+
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if current_line.is_empty() {
+            if word_len > max_chars {
+                split_long_word(word, max_chars, &mut lines);
+                current_line.clear();
+                current_len = 0;
+            } else {
+                current_line.push_str(word);
+                current_len = word_len;
+            }
+            continue;
+        }
+
+        if current_len + 1 + word_len <= max_chars {
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            lines.push(current_line);
+            current_line = String::new();
+            current_len = 0;
+
+            if word_len > max_chars {
+                split_long_word(word, max_chars, &mut lines);
+            } else {
+                current_line.push_str(word);
+                current_len = word_len;
+            }
+        }
+    }
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
+}
+
+fn split_long_word(word: &str, max_chars: usize, lines: &mut Vec<String>) {
+    if max_chars == 0 {
+        lines.push(word.to_string());
+        return;
+    }
+
+    let mut buffer = String::new();
+    let mut count = 0usize;
+
+    for ch in word.chars() {
+        buffer.push(ch);
+        count += 1;
+
+        if count == max_chars {
+            lines.push(buffer.clone());
+            buffer.clear();
+            count = 0;
+        }
+    }
+
+    if !buffer.is_empty() {
+        lines.push(buffer);
+    }
+}
+
+fn max_characters_for_width(max_width_mm: f32, font_size: f32) -> usize {
+    let approx_char_width_mm = font_size * 0.5 * 0.352_778_f32;
+    let estimated = (max_width_mm / approx_char_width_mm).floor() as usize;
+    estimated.max(8)
 }
 
 fn draw_line(layer: &PdfLayerReference, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32) {
