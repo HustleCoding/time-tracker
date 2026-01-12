@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-notarize-release:
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -77,7 +77,8 @@ jobs:
 
           xcrun notarytool submit "${{ steps.paths.outputs.dmg }}" \
             --keychain-profile "time-tracker-notary" \
-            --wait
+            --wait \
+            --timeout 110m
 
       - name: Staple and validate
         run: |
