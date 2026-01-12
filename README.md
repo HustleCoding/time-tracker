@@ -80,6 +80,35 @@ Shortcuts:
 
 - If packaging for distribution, configure signing/notarization per platform after `pnpm tauri build`.
 
+## Signed & notarized macOS release (direct download)
+
+To distribute a macOS app via a normal downloadable link (e.g. GitHub Releases) without Gatekeeper warnings, build a **Developer ID signed** and **notarized** `.dmg`.
+
+This repo includes a GitHub Actions workflow that builds a **universal** DMG (Intel + Apple Silicon), notarizes it, and uploads it to the GitHub Release when you push a tag like `v0.1.1`:
+
+- Workflow: `.github/workflows/release-macos.yml`
+- Entitlements: `src-tauri/entitlements.plist`
+
+One-time setup:
+
+1. Create/install a **Developer ID Application** certificate in Keychain Access.
+2. Create an **App Store Connect API key** for notarization (recommended).
+3. In your GitHub repo, add these Secrets (Settings → Secrets and variables → Actions):
+   - `APPLE_CERTIFICATE_P12_BASE64`: base64 of a `.p12` export of your Developer ID Application certificate (including private key)
+   - `APPLE_CERTIFICATE_P12_PASSWORD`: password you set when exporting the `.p12`
+   - `APPLE_SIGNING_IDENTITY`: from `security find-identity -v -p codesigning` (e.g. `Developer ID Application: Your Name (TEAMID)`)
+   - `APPLE_NOTARYTOOL_KEY_ID`: API Key ID
+   - `APPLE_NOTARYTOOL_ISSUER_ID`: API Issuer ID
+   - `APPLE_NOTARYTOOL_API_KEY_P8_BASE64`: base64 of the `.p8` API key file contents
+
+Release steps:
+
+1. Bump version in `package.json` and `src-tauri/tauri.conf.json`.
+2. Push a tag (example):
+   - `git tag v0.1.2`
+   - `git push origin v0.1.2`
+3. After the workflow finishes, download the notarized `.dmg` from the GitHub Release assets.
+
 ## Unsigned release checklist (manual)
 
 - Bump version in `package.json` and `src-tauri/tauri.conf.json`.
