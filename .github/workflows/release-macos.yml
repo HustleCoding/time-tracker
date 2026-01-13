@@ -59,6 +59,13 @@ jobs:
           DMG_PATH="$(find src-tauri/target -type f -path '*/release/bundle/dmg/*.dmg' -print0 | xargs -0 ls -t | head -n 1)"
           echo "dmg=$DMG_PATH" >> "$GITHUB_OUTPUT"
 
+      - name: Upload DMG artifact (before notarization)
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg-${{ github.ref_name }}
+          path: ${{ steps.paths.outputs.dmg }}
+          if-no-files-found: error
+
       - name: Prepare notarization key
         shell: bash
         run: |
@@ -83,11 +90,14 @@ jobs:
 
           SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$SUBMIT_JSON")"
 
-          echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
           echo "Submission ID: $SUBMISSION_ID"
+          echo "Notarization submission: $SUBMISSION_ID" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Check status locally:" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`xcrun notarytool info $SUBMISSION_ID --keychain-profile time-tracker-notary\`" >> "$GITHUB_STEP_SUMMARY"
 
           start_ts="$(date +%s)"
-          deadline_seconds="$((5 * 60 * 60))"
+          deadline_seconds="$((5 * 60 * 60 + 45 * 60))"
 
           while true; do
             now_ts="$(date +%s)"
@@ -128,7 +138,7 @@ jobs:
                 ;;
               *)
                 echo "Current status: ${STATUS:-In Progress}..."
-                sleep 30
+                sleep 60
                 ;;
             esac
           done
