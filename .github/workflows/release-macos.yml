@@ -59,12 +59,27 @@ jobs:
           DMG_PATH="$(find src-tauri/target -type f -path '*/release/bundle/dmg/*.dmg' -print0 | xargs -0 ls -t | head -n 1)"
           echo "dmg=$DMG_PATH" >> "$GITHUB_OUTPUT"
 
+      - name: Create pending DMG copy
+        id: pending
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="${{ steps.paths.outputs.dmg }}"
+          PENDING="${DMG%.dmg}_PENDING_NOTARIZATION.dmg"
+          cp "$DMG" "$PENDING"
+          echo "dmg=$PENDING" >> "$GITHUB_OUTPUT"
+
       - name: Upload DMG artifact (before notarization)
         uses: actions/upload-artifact@v4
         with:
           name: macos-dmg-${{ github.ref_name }}
           path: ${{ steps.paths.outputs.dmg }}
           if-no-files-found: error
+
+      - name: Upload pending DMG to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.pending.outputs.dmg }}
 
       - name: Prepare notarization key
         shell: bash
@@ -74,6 +89,7 @@ jobs:
           echo "${{ secrets.APPLE_NOTARYTOOL_API_KEY_P8_BASE64 }}" | base64 -d > AuthKey.p8
 
       - name: Notarize DMG (poll until accepted)
+        id: notarize
         shell: bash
         run: |
           set -euo pipefail
@@ -95,18 +111,20 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Check status locally:" >> "$GITHUB_STEP_SUMMARY"
           echo "\`xcrun notarytool info $SUBMISSION_ID --keychain-profile time-tracker-notary\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
 
           start_ts="$(date +%s)"
           deadline_seconds="$((5 * 60 * 60 + 45 * 60))"
+          notarized="false"
 
           while true; do
             now_ts="$(date +%s)"
             elapsed="$((now_ts - start_ts))"
             if [ "$elapsed" -ge "$deadline_seconds" ]; then
               echo "Timed out waiting for notarization after $elapsed seconds."
-              echo "You can check status later with:"
-              echo "  xcrun notarytool info $SUBMISSION_ID --key AuthKey.p8 --key-id $KEY_ID --issuer $ISSUER_ID"
-              exit 1
+              echo "Notarization is still processing on Apple's side."
+              echo "Use the 'Finalize macOS notarization' workflow once it becomes Accepted."
+              break
             fi
 
             INFO_JSON="$(xcrun notarytool info "$SUBMISSION_ID" \
@@ -126,6 +144,7 @@ jobs:
             case "$STATUS" in
               Accepted)
                 echo "Notarization Accepted."
+                notarized="true"
                 break
                 ;;
               Invalid)
@@ -143,12 +162,30 @@ jobs:
             esac
           done
 
+          echo "notarized=$notarized" >> "$GITHUB_OUTPUT"
+
       - name: Staple and validate
+        if: steps.notarize.outputs.notarized == 'true'
         run: |
           xcrun stapler staple "${{ steps.paths.outputs.dmg }}"
           xcrun stapler validate "${{ steps.paths.outputs.dmg }}"
 
       - name: Upload DMG to GitHub Release
+        if: steps.notarize.outputs.notarized == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.paths.outputs.dmg }}
+
+      - name: Notarization pending notice
+        if: steps.notarize.outputs.notarized != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Notarization still in progress." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pending DMG uploaded to the Release:" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`${{ steps.pending.outputs.dmg }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "When the submission becomes Accepted, run the 'Finalize macOS notarization' workflow with:" >> "$GITHUB_STEP_SUMMARY"
+          echo "- tag: \`${{ github.ref_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- submission_id: \`${{ steps.notarize.outputs.submission_id }}\`" >> "$GITHUB_STEP_SUMMARY"

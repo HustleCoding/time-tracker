@@ -1,0 +1,90 @@
+name: finalize-macos-notarization
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.6)"
+        required: true
+        type: string
+      submission_id:
+        description: "Apple notary submission id (UUID)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (for tooling only)
+        uses: actions/checkout@v4
+
+      - name: Prepare notarization key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.APPLE_NOTARYTOOL_API_KEY_P8_BASE64 }}" | base64 -D > AuthKey.p8 2>/dev/null || \
+          echo "${{ secrets.APPLE_NOTARYTOOL_API_KEY_P8_BASE64 }}" | base64 -d > AuthKey.p8
+
+      - name: Check notarization status
+        id: status
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEY_ID="${{ secrets.APPLE_NOTARYTOOL_KEY_ID }}"
+          ISSUER_ID="${{ secrets.APPLE_NOTARYTOOL_ISSUER_ID }}"
+          SUBMISSION_ID="${{ inputs.submission_id }}"
+
+          INFO_JSON="$(xcrun notarytool info "$SUBMISSION_ID" \
+            --key AuthKey.p8 \
+            --key-id "$KEY_ID" \
+            --issuer "$ISSUER_ID" \
+            --output-format json)"
+
+          STATUS="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$INFO_JSON")"
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+          echo "Notary status: $STATUS" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$STATUS" = "Invalid" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Notarization log:" >> "$GITHUB_STEP_SUMMARY"
+            xcrun notarytool log "$SUBMISSION_ID" \
+              --key AuthKey.p8 \
+              --key-id "$KEY_ID" \
+              --issuer "$ISSUER_ID" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          if [ "$STATUS" != "Accepted" ]; then
+            exit 1
+          fi
+
+      - name: Download pending DMG from Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "${{ inputs.tag }}" --pattern "*_PENDING_NOTARIZATION.dmg"
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Staple and validate
+        id: staple
+        shell: bash
+        run: |
+          set -euo pipefail
+          DMG="$(ls -1 *_PENDING_NOTARIZATION.dmg | head -n 1)"
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          FINAL="${DMG%_PENDING_NOTARIZATION.dmg}.dmg"
+          mv "$DMG" "$FINAL"
+          echo "final_dmg=$FINAL" >> "$GITHUB_OUTPUT"
+
+      - name: Upload notarized DMG to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: ${{ steps.staple.outputs.final_dmg }}
