@@ -11,7 +11,7 @@ permissions:
 jobs:
   build-notarize-release:
     runs-on: macos-14
-    timeout-minutes: 120
+    timeout-minutes: 360
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,19 +66,72 @@ jobs:
           echo "${{ secrets.APPLE_NOTARYTOOL_API_KEY_P8_BASE64 }}" | base64 -D > AuthKey.p8 2>/dev/null || \
           echo "${{ secrets.APPLE_NOTARYTOOL_API_KEY_P8_BASE64 }}" | base64 -d > AuthKey.p8
 
-      - name: Notarize DMG
+      - name: Notarize DMG (poll until accepted)
         shell: bash
         run: |
           set -euo pipefail
-          xcrun notarytool store-credentials "time-tracker-notary" \
-            --key AuthKey.p8 \
-            --key-id "${{ secrets.APPLE_NOTARYTOOL_KEY_ID }}" \
-            --issuer "${{ secrets.APPLE_NOTARYTOOL_ISSUER_ID }}"
+          KEY_ID="${{ secrets.APPLE_NOTARYTOOL_KEY_ID }}"
+          ISSUER_ID="${{ secrets.APPLE_NOTARYTOOL_ISSUER_ID }}"
+          DMG="${{ steps.paths.outputs.dmg }}"
 
-          xcrun notarytool submit "${{ steps.paths.outputs.dmg }}" \
-            --keychain-profile "time-tracker-notary" \
-            --wait \
-            --timeout 110m
+          echo "Submitting: $DMG"
+          SUBMIT_JSON="$(xcrun notarytool submit "$DMG" \
+            --key AuthKey.p8 \
+            --key-id "$KEY_ID" \
+            --issuer "$ISSUER_ID" \
+            --output-format json)"
+
+          SUBMISSION_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$SUBMIT_JSON")"
+
+          echo "submission_id=$SUBMISSION_ID" >> "$GITHUB_OUTPUT"
+          echo "Submission ID: $SUBMISSION_ID"
+
+          start_ts="$(date +%s)"
+          deadline_seconds="$((5 * 60 * 60))"
+
+          while true; do
+            now_ts="$(date +%s)"
+            elapsed="$((now_ts - start_ts))"
+            if [ "$elapsed" -ge "$deadline_seconds" ]; then
+              echo "Timed out waiting for notarization after $elapsed seconds."
+              echo "You can check status later with:"
+              echo "  xcrun notarytool info $SUBMISSION_ID --key AuthKey.p8 --key-id $KEY_ID --issuer $ISSUER_ID"
+              exit 1
+            fi
+
+            INFO_JSON="$(xcrun notarytool info "$SUBMISSION_ID" \
+              --key AuthKey.p8 \
+              --key-id "$KEY_ID" \
+              --issuer "$ISSUER_ID" \
+              --output-format json 2>/dev/null || true)"
+
+            if [ -z "$INFO_JSON" ]; then
+              echo "Notary status check failed (temporary); retrying in 30s..."
+              sleep 30
+              continue
+            fi
+
+            STATUS="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<<"$INFO_JSON")"
+
+            case "$STATUS" in
+              Accepted)
+                echo "Notarization Accepted."
+                break
+                ;;
+              Invalid)
+                echo "Notarization Invalid. Fetching log..."
+                xcrun notarytool log "$SUBMISSION_ID" \
+                  --key AuthKey.p8 \
+                  --key-id "$KEY_ID" \
+                  --issuer "$ISSUER_ID"
+                exit 1
+                ;;
+              *)
+                echo "Current status: ${STATUS:-In Progress}..."
+                sleep 30
+                ;;
+            esac
+          done
 
       - name: Staple and validate
         run: |
