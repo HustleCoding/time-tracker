@@ -88,3 +88,16 @@ jobs:
         with:
           tag_name: ${{ inputs.tag }}
           files: ${{ steps.staple.outputs.final_dmg }}
+
+      - name: Publish release and remove pending DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          gh release edit "$TAG" --draft=false
+
+          while IFS= read -r asset; do
+            gh release delete-asset "$TAG" "$asset" -y
+          done < <(gh release view "$TAG" --json assets -q '.assets[].name' | grep -E '_PENDING_NOTARIZATION\\.dmg$' || true)
+        env:
+          GH_TOKEN: ${{ github.token }}

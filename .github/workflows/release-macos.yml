@@ -49,7 +49,7 @@ jobs:
             --target universal-apple-darwin \
             --bundles dmg \
             --ci \
-            --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"${APPLE_SIGNING_IDENTITY}\"}}}"
+            --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"${APPLE_SIGNING_IDENTITY}\",\"entitlements\":\"entitlements.plist\",\"hardenedRuntime\":true}}}"
 
       - name: Find DMG path
         id: paths
@@ -79,6 +79,7 @@ jobs:
       - name: Upload pending DMG to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: ${{ steps.pending.outputs.dmg }}
 
       - name: Prepare notarization key
@@ -174,7 +175,23 @@ jobs:
         if: steps.notarize.outputs.notarized == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          draft: false
           files: ${{ steps.paths.outputs.dmg }}
+
+      - name: Publish release and remove pending DMG
+        if: steps.notarize.outputs.notarized == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          gh release edit "$TAG" --draft=false
+
+          PENDING_BASENAME="$(basename "${{ steps.pending.outputs.dmg }}")"
+          if gh release view "$TAG" --json assets -q ".assets[].name" | grep -Fxq "$PENDING_BASENAME"; then
+            gh release delete-asset "$TAG" "$PENDING_BASENAME" -y
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Notarization pending notice
         if: steps.notarize.outputs.notarized != 'true'
