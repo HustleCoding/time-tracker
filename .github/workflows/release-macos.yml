@@ -33,7 +33,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       - name: Import Apple signing certificate
         uses: apple-actions/import-codesign-certs@v3
@@ -41,12 +41,12 @@ jobs:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_P12_PASSWORD }}
 
-      - name: Build universal DMG (Intel + Apple Silicon)
+      - name: Build DMG (Apple Silicon)
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: |
           pnpm tauri build \
-            --target universal-apple-darwin \
+            --target aarch64-apple-darwin \
             --bundles dmg \
             --ci \
             --config "{\"bundle\":{\"macOS\":{\"signingIdentity\":\"${APPLE_SIGNING_IDENTITY}\",\"entitlements\":\"entitlements.plist\",\"hardenedRuntime\":true}}}"
